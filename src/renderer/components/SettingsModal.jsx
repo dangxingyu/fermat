@@ -19,17 +19,38 @@ export default function SettingsModal({ onClose }) {
   const [leanDetect, setLeanDetect] = useState(null); // { available, path, version } | null
   const [leanTesting, setLeanTesting] = useState(false);
 
-  // Load current engine from main process on mount
+  // Load persisted settings from main process on mount (B-01 fix).
+  // Falls back to current engine + defaults if no persisted settings exist.
   useEffect(() => {
-    async function loadEngine() {
+    async function loadPersisted() {
+      try {
+        const stored = await window.api?.settings?.load?.();
+        if (stored) {
+          const { copilot, texEngine } = stored;
+          setSettings(prev => ({
+            ...prev,
+            claudeApiKey:      copilot?.models?.claude?.apiKey         ?? prev.claudeApiKey,
+            claudeModel:       copilot?.models?.claude?.model          ?? prev.claudeModel,
+            texEngine:         texEngine                               ?? prev.texEngine,
+            maxConcurrent:     copilot?.maxConcurrent                  ?? prev.maxConcurrent,
+            autoInlineEasy:    copilot?.autoInlineDifficulty?.includes('Easy') ?? prev.autoInlineEasy,
+            verificationMode:  copilot?.verificationMode               ?? prev.verificationMode,
+            leanBinaryPath:    copilot?.lean?.binaryPath               ?? prev.leanBinaryPath,
+            leanMaxRetries:    copilot?.lean?.maxRetries               ?? prev.leanMaxRetries,
+            leanUsesMathlib:   copilot?.lean?.usesMathlib              ?? prev.leanUsesMathlib,
+          }));
+          return;
+        }
+      } catch (e) {
+        console.warn('[SettingsModal] settings.load failed, falling back:', e?.message);
+      }
+      // Fallback: fetch current tex engine from the compiler
       if (window.api?.tex?.getEngine) {
         const engine = await window.api.tex.getEngine();
-        if (engine) {
-          setSettings(prev => ({ ...prev, texEngine: engine }));
-        }
+        if (engine) setSettings(prev => ({ ...prev, texEngine: engine }));
       }
     }
-    loadEngine();
+    loadPersisted();
   }, []);
 
   const update = (key, value) => setSettings(prev => ({ ...prev, [key]: value }));

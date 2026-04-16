@@ -96,10 +96,17 @@ class FermatEngine extends EventEmitter {
   cancelProof(taskId) {
     const task = this.tasks.get(taskId);
     if (!task) return false;
-    if (['running', 'sketching', 'proving', 'verifying'].includes(task.status)) {
-      task.abortController.abort();
-    }
+    // Always abort — even for queued tasks that haven't started — so that
+    // an already-resolved statement review or in-flight network call can see
+    // the signal. The signal is forwarded into the backend pipeline (B-03).
+    try { task.abortController.abort(); } catch {}
     task.status = 'cancelled';
+    // Drop the task's statement-review resolver if one is outstanding so the
+    // sketch→fill pipeline unblocks and returns early.
+    this.cancelLeanStatement(taskId);
+    // Remove from queue so _processQueue doesn't have to skip the corpse (B-09)
+    const qi = this.queue.indexOf(task);
+    if (qi >= 0) this.queue.splice(qi, 1);
     this.tasks.delete(taskId);
     return true;
   }
@@ -236,6 +243,7 @@ class FermatEngine extends EventEmitter {
         maxLeanRetries: this.config.lean?.maxRetries ?? 3,
         onStatementReview,
         taskId: task.id,
+        signal: task.abortController.signal, // B-03: forward cancel into backend
       });
 
       task.status = 'completed';
@@ -260,7 +268,9 @@ class FermatEngine extends EventEmitter {
         leanStatement: result.leanStatement || null,
       });
     } catch (err) {
-      if (err.name === 'AbortError') {
+      // B-03: treat any abort signal hit as a clean cancellation (some paths
+      // re-throw generic Error with a "cancelled" code instead of DOMException)
+      if (err.name === 'AbortError' || err.code === 'ABORT_ERR' || err.code === 'FERMAT_CANCELLED') {
         task.status = 'cancelled';
         return;
       }

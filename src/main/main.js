@@ -1,10 +1,29 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const Store = require('electron-store');
 const { FermatEngine } = require('./copilot-engine');
 const { TexCompiler } = require('./tex-compiler');
 const { SynctexBridge } = require('./synctex-bridge');
 const { LeanRunner } = require('./lean-runner');
+
+// ─── Persistent settings store ────────────────────────────────────────────
+// Wires into the `copilot:configure`, `tex:set-engine`, and `settings:load` IPC
+// handlers so settings survive across app restarts.
+const settingsStore = new Store({
+  name: 'fermat-settings',
+  defaults: {
+    copilot: {
+      defaultModel: 'claude',
+      models: { claude: { apiKey: '', model: 'claude-sonnet-4-6' } },
+      maxConcurrent: 3,
+      autoInlineDifficulty: ['Easy'],
+      verificationMode: 'off',
+      lean: { binaryPath: '', maxRetries: 3, usesMathlib: false },
+    },
+    texEngine: 'tectonic',
+  },
+});
 
 // ─── Auto-updater (electron-updater → GitHub Releases) ────────────────────
 // Only active in packaged builds; skipped in dev mode so dev startup is fast.
@@ -104,6 +123,24 @@ function createWindow() {
   synctexBridge = new SynctexBridge();
   leanRunner = new LeanRunner();
   leanRunner.detect(); // auto-detect on startup; re-detected when settings change
+
+  // ─── Restore persisted settings ───────────────────────────────────────
+  // Apply stored copilot / tex / lean config before the renderer mounts, so
+  // the first proof submission already picks up the saved API key.
+  try {
+    const storedCopilot = settingsStore.get('copilot');
+    if (storedCopilot) {
+      copilotEngine.configure(storedCopilot);
+      const storedLean = storedCopilot.lean || {};
+      leanRunner.detect(storedLean.binaryPath || undefined);
+      leanRunner.setUsesMathlib(!!storedLean.usesMathlib);
+    }
+    const storedEngine = settingsStore.get('texEngine');
+    if (storedEngine) texCompiler.setEngine(storedEngine);
+    console.log('[Settings] Restored persisted settings from disk');
+  } catch (err) {
+    console.warn('[Settings] Failed to restore settings:', err.message);
+  }
 
   // ─── Auto-updater events ───────────────────────────────────────────
   if (autoUpdater) {
@@ -253,6 +290,7 @@ ipcMain.handle('file:open', async () => {
   });
   if (result.canceled) return null;
   const filePath = result.filePaths[0];
+  registerApprovedPath(filePath); // S-01: whitelist before renderer can re-read it
   const content = fs.readFileSync(filePath, 'utf-8');
   return { filePath, content };
 });
@@ -269,6 +307,7 @@ ipcMain.handle('file:save', async (_event, { filePath, content }) => {
     filePath = result.filePath;
   }
   fs.writeFileSync(filePath, content, 'utf-8');
+  registerApprovedPath(filePath); // S-01
   return filePath;
 });
 
@@ -283,10 +322,50 @@ ipcMain.handle('file:save-as', async (_event, { filePath, content }) => {
   });
   if (result.canceled) return null;
   fs.writeFileSync(result.filePath, content, 'utf-8');
+  registerApprovedPath(result.filePath); // S-01
   return result.filePath;
 });
 
+// ─── Sandbox: approved paths for renderer file reads (S-01 fix) ───
+// Any path that the user explicitly exposes (via file:open, file:open-folder,
+// file:save, or file:save-as) is registered here. file:read rejects paths
+// not in this set, which blocks the renderer from pulling arbitrary files
+// like /etc/passwd or ~/.ssh/id_rsa via a compromised script.
+const approvedReadPaths = new Set();
+const approvedReadDirs  = new Set();
+
+function registerApprovedPath(p) {
+  if (!p) return;
+  try { approvedReadPaths.add(fs.realpathSync(p)); }
+  catch { approvedReadPaths.add(path.resolve(p)); }
+}
+function registerApprovedDir(d) {
+  if (!d) return;
+  try { approvedReadDirs.add(fs.realpathSync(d)); }
+  catch { approvedReadDirs.add(path.resolve(d)); }
+}
+function isPathApproved(requested) {
+  try {
+    const real = fs.existsSync(requested) ? fs.realpathSync(requested) : path.resolve(requested);
+    if (approvedReadPaths.has(real)) return true;
+    for (const dir of approvedReadDirs) {
+      const rel = path.relative(dir, real);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 ipcMain.handle('file:read', async (_event, filePath) => {
+  if (typeof filePath !== 'string' || !filePath) {
+    throw new Error('file:read requires a non-empty path');
+  }
+  if (!isPathApproved(filePath)) {
+    console.warn(`[Security] file:read denied (not approved): ${filePath}`);
+    throw new Error(`file:read denied: path not approved (${filePath})`);
+  }
   return fs.readFileSync(filePath, 'utf-8');
 });
 
@@ -297,12 +376,19 @@ ipcMain.handle('file:open-folder', async () => {
   });
   if (result.canceled) return null;
   const folderPath = result.filePaths[0];
+  registerApprovedDir(folderPath); // S-01: allow reads anywhere under this folder
   const files = listLatexFiles(folderPath);
   return { folderPath, files };
 });
 
 // List .tex / .bib / .sty files in a folder (non-recursive, skips hidden + build dirs).
+// S-01: only list folders the user has explicitly opened via file:open-folder.
 ipcMain.handle('file:list-dir', async (_event, folderPath) => {
+  if (typeof folderPath !== 'string' || !folderPath) return [];
+  if (!isPathApproved(folderPath)) {
+    console.warn(`[Security] file:list-dir denied (not approved): ${folderPath}`);
+    return [];
+  }
   return listLatexFiles(folderPath);
 });
 
@@ -330,6 +416,10 @@ ipcMain.handle('tex:compile', async (_event, { filePath, content }) => {
 
 ipcMain.handle('tex:set-engine', async (_event, engine) => {
   texCompiler.setEngine(engine);
+  // Persist selection (B-01 fix)
+  try { settingsStore.set('texEngine', engine); } catch (err) {
+    console.warn('[Settings] Failed to persist tex engine:', err.message);
+  }
 });
 
 ipcMain.handle('tex:get-engine', async () => {
@@ -339,10 +429,17 @@ ipcMain.handle('tex:get-engine', async () => {
 // ─── Fermat Copilot ────────────────────────────────────────────────
 ipcMain.handle('copilot:configure', async (_event, config) => {
   copilotEngine.configure(config);
+  // Persist to disk so settings survive restarts (B-01 fix)
+  try { settingsStore.set('copilot', config); } catch (err) {
+    console.warn('[Settings] Failed to persist copilot config:', err.message);
+  }
   // Log whether an API key was provided (masked) so users can verify config.
   const claudeKey = config?.models?.claude?.apiKey;
   if (claudeKey) {
-    const masked = claudeKey.slice(0, 10) + '...' + claudeKey.slice(-4);
+    // Require at least 16 chars before showing any prefix/suffix (S-02 fix)
+    const masked = claudeKey.length >= 16
+      ? claudeKey.slice(0, 6) + '…' + claudeKey.slice(-4)
+      : `(key length ${claudeKey.length})`;
     console.log(`[Copilot] Configured with Claude API key: ${masked} (model: ${config?.models?.claude?.model})`);
   } else {
     console.log('[Copilot] Configured WITHOUT Claude API key — will rely on Claude CLI if installed');
@@ -420,6 +517,16 @@ ipcMain.handle('lean:edit-statement', async (_event, { taskId, newCode }) => {
 
 ipcMain.handle('lean:cancel-statement', async (_event, taskId) => {
   copilotEngine.cancelLeanStatement(taskId);
+});
+
+// ─── Persistent settings ───────────────────────────────────────────
+// Renderer reads this on mount to hydrate the Settings modal with the
+// user's saved preferences (B-01 fix — settings no longer reset on restart).
+ipcMain.handle('settings:load', async () => {
+  return {
+    copilot: settingsStore.get('copilot'),
+    texEngine: settingsStore.get('texEngine'),
+  };
 });
 
 // ─── Theory Outline ────────────────────────────────────────────────

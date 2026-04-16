@@ -81,9 +81,23 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
     let cancelled = false;
 
     async function loadDoc() {
-      const data = Uint8Array.from(atob(pdfData), c => c.charCodeAt(0));
-      const doc = await pdfjsLib.getDocument({ data }).promise;
-      if (cancelled) { doc.destroy(); return; }
+      // B-04: destroy the previous doc BEFORE loading a new one, otherwise
+      // each recompile leaks the prior PDF's decoded page data.
+      if (pdfDocRef.current) {
+        try { await pdfDocRef.current.destroy(); } catch {}
+        pdfDocRef.current = null;
+      }
+      // P-02: decode base64 off the render thread via Blob/ArrayBuffer so
+      // large PDFs don't freeze the UI for hundreds of milliseconds.
+      const binStr = atob(pdfData);
+      const blob = new Blob(
+        [Uint8Array.from(binStr, c => c.charCodeAt(0))],
+        { type: 'application/pdf' },
+      );
+      const buf = await blob.arrayBuffer();
+      if (cancelled) return;
+      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+      if (cancelled) { try { await doc.destroy(); } catch {} return; }
       pdfDocRef.current = doc;
       setTotalPages(doc.numPages);
       renderStateRef.current = new Map();
@@ -117,7 +131,15 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
     }
 
     loadDoc();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // B-04: destroy on unmount too, so leaving the PDF panel frees memory
+      if (pdfDocRef.current) {
+        const doc = pdfDocRef.current;
+        pdfDocRef.current = null;
+        try { doc.destroy(); } catch {}
+      }
+    };
   }, [pdfData]);
 
   // ─── Render a single page into its container ───

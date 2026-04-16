@@ -169,15 +169,19 @@ class LeanRunner {
       return this._verifyCoreOnly(leanSource, onLine, signal);
     }
 
-    // Write temp file into the lake project directory.
-    const tmpFile = path.join(this._workspacePath, '_FermatVerify.lean');
+    // B-02: write to a *unique* filename so concurrent verifications
+    // (the sketch→fill→sorrify pipeline runs several) don't clobber each other.
+    // The file must be a Lean-valid module name: letters, digits, underscores.
+    const uniq = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const tmpName = `_FermatVerify_${uniq}.lean`;
+    const tmpFile = path.join(this._workspacePath, tmpName);
     fs.writeFileSync(tmpFile, leanSource, 'utf-8');
 
     const env = this._buildEnv();
     // `lake env lean <file>` — lake sets up LEAN_PATH then execs lean
     return this._runLean(
       lakeBin,
-      ['env', 'lean', '_FermatVerify.lean'],
+      ['env', 'lean', tmpName],
       env,
       this._workspacePath,  // cwd must be the lake project root
       tmpFile,

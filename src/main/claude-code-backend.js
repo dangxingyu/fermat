@@ -128,6 +128,12 @@ class ClaudeCodeBackend {
    */
   async prove(texContent, marker, options = {}) {
     console.log(`[Prove] Starting proof for marker "${marker.label || marker.id}" (line ${marker.lineNumber || '?'})`);
+    // B-03: bail early if the caller has already aborted
+    if (options.signal?.aborted) {
+      const err = new Error('Cancelled before start');
+      err.code = 'FERMAT_CANCELLED';
+      throw err;
+    }
 
     // 1. Parse the document
     const outline = parseTheoryOutline(texContent);
@@ -208,7 +214,7 @@ class ClaudeCodeBackend {
       try {
         const raw = await this._callLlm(
           this._buildSketchPrompt(contextPrompt, results.proof, sketch, sketchErrors, attempt),
-          onStream, apiKey, model, LEAN_SYS,
+          onStream, apiKey, model, LEAN_SYS, options.signal,
         );
         sketch = this._extractLeanBlock(raw) || raw.trim();
       } catch (err) {
@@ -222,7 +228,7 @@ class ClaudeCodeBackend {
       const sketchResult = await leanRunner.verify(sketch, (line) => {
         sketchLog += line + '\n';
         if (onStream) onStream(`[lean] ${line}`);
-      });
+      }, options.signal);
       sketchErrors = sketchResult.errors.filter(e => e.severity === 'error');
 
       if (sketchErrors.length === 0) {
@@ -278,7 +284,7 @@ class ClaudeCodeBackend {
         const recheck = await leanRunner.verify(sketch, (line) => {
           sketchLog += line + '\n';
           if (onStream) onStream(`[lean] ${line}`);
-        });
+        }, options.signal);
         sketchErrors = recheck.errors.filter(e => e.severity === 'error');
         if (sketchErrors.length > 0) {
           console.warn('[LeanSFV] User-edited sketch has errors; proceeding anyway per user choice');
@@ -327,7 +333,7 @@ class ClaudeCodeBackend {
 
         let rawFill;
         try {
-          rawFill = await this._callLlm(prompt, onStream, apiKey, model, LEAN_SYS);
+          rawFill = await this._callLlm(prompt, onStream, apiKey, model, LEAN_SYS, options.signal);
         } catch (err) {
           console.error(`[LeanSFV] Fill ${i} attempt ${attempt} error:`, err.message);
           break;
@@ -340,7 +346,7 @@ class ClaudeCodeBackend {
         const fillResult = await leanRunner.verify(candidate, (line) => {
           lineOut += line + '\n';
           if (onStream) onStream(`[lean] ${line}`);
-        });
+        }, options.signal);
         leanLog = lineOut;
         fillErrors = fillResult.errors.filter(e => e.severity === 'error');
 
@@ -377,7 +383,7 @@ class ClaudeCodeBackend {
     const remainingSorries = (currentCode.match(/\bsorry\b/g) || []).length;
 
     let finalLog = '';
-    const finalResult = await leanRunner.verify(currentCode, (line) => { finalLog += line + '\n'; });
+    const finalResult = await leanRunner.verify(currentCode, (line) => { finalLog += line + '\n'; }, options.signal);
     const finalErrors = finalResult.errors.filter(e => e.severity === 'error');
     const leanVerified = finalErrors.length === 0 && remainingSorries === 0;
 
@@ -399,11 +405,17 @@ class ClaudeCodeBackend {
   /**
    * Unified LLM call — uses Claude CLI when available, direct API otherwise.
    * @param {string} [systemPrompt] — system instructions (prepended for CLI, separate param for API)
+   * @param {AbortSignal} [signal]  — forward cancel to the CLI spawn or SDK stream (B-03)
    */
-  async _callLlm(prompt, onStream, apiKey, model, systemPrompt = '') {
+  async _callLlm(prompt, onStream, apiKey, model, systemPrompt = '', signal = undefined) {
+    if (signal?.aborted) {
+      const err = new Error('Cancelled before LLM call');
+      err.code = 'FERMAT_CANCELLED';
+      throw err;
+    }
     if (this._hasClaudeCli) {
       const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
-      return this._runClaude(fullPrompt, onStream);
+      return this._runClaude(fullPrompt, onStream, signal);
     }
     const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey });
@@ -415,12 +427,28 @@ class ClaudeCodeBackend {
       messages: [{ role: 'user', content: prompt }],
     };
     if (systemPrompt) msgParams.system = systemPrompt;
-    const stream = await client.messages.stream(msgParams);
-    for await (const ev of stream) {
-      if (ev.type === 'content_block_delta' && ev.delta?.text) {
-        text += ev.delta.text;
-        if (onStream) onStream(ev.delta.text);
+    // Anthropic SDK accepts an AbortSignal as the second arg's `signal` option.
+    const stream = await client.messages.stream(msgParams, signal ? { signal } : undefined);
+    try {
+      for await (const ev of stream) {
+        if (signal?.aborted) {
+          try { stream.controller?.abort?.(); } catch {}
+          const err = new Error('Cancelled mid-stream');
+          err.code = 'FERMAT_CANCELLED';
+          throw err;
+        }
+        if (ev.type === 'content_block_delta' && ev.delta?.text) {
+          text += ev.delta.text;
+          if (onStream) onStream(ev.delta.text);
+        }
       }
+    } catch (err) {
+      if (signal?.aborted) {
+        const abortErr = new Error('Cancelled');
+        abortErr.code = 'FERMAT_CANCELLED';
+        throw abortErr;
+      }
+      throw err;
     }
     return text;
   }
@@ -574,7 +602,7 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       const sketchSkill = this._loadSkill('fermat-sketch');
       const sketchPrompt = `${sketchSkill}\n\n---\n\nHere is the context for your task:\n\n${contextPrompt}`;
       const t0 = Date.now();
-      results.sketch = await this._runClaude(sketchPrompt, onStream);
+      results.sketch = await this._runClaude(sketchPrompt, onStream, options.signal);
       console.log(`[Prove] Sketch done (${Date.now()-t0}ms, ${results.sketch.length}ch)`);
     }
 
@@ -586,7 +614,7 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       provePrompt += `\n\n<proof_sketch>\n${results.sketch}\n</proof_sketch>`;
     }
     const tp0 = Date.now();
-    results.proof = await this._runClaude(provePrompt, onStream);
+    results.proof = await this._runClaude(provePrompt, onStream, options.signal);
     console.log(`[Prove] Proof draft done (${Date.now()-tp0}ms, ${results.proof.length}ch)`);
 
     // Verify (unless skipped)
@@ -595,7 +623,7 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       const verifySkill = this._loadSkill('fermat-verify');
       const verifyPrompt = `${verifySkill}\n\n---\n\n${contextPrompt}\n\n<proof_to_verify>\n${results.proof}\n</proof_to_verify>`;
       const tv0 = Date.now();
-      results.verdict = await this._runClaude(verifyPrompt, onStream);
+      results.verdict = await this._runClaude(verifyPrompt, onStream, options.signal);
       const verdictTag = results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown';
       console.log(`[Prove] Verdict: ${verdictTag} (${Date.now()-tv0}ms)`);
 
@@ -605,11 +633,11 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       if (needsRetry) {
         console.log(`[Prove] Verification failed — retrying with feedback`);
         const retryPrompt = `${proveSkill}\n\n---\n\n${contextPrompt}\n\n<previous_attempt>\n${results.proof}\n</previous_attempt>\n\n<verification_feedback>\n${results.verdict}\n</verification_feedback>\n\nThe previous proof attempt FAILED verification. Please write a corrected proof addressing the issues identified above.`;
-        results.proof = await this._runClaude(retryPrompt, onStream);
+        results.proof = await this._runClaude(retryPrompt, onStream, options.signal);
 
         // Re-verify
         const reVerifyPrompt = `${verifySkill}\n\n---\n\n${contextPrompt}\n\n<proof_to_verify>\n${results.proof}\n</proof_to_verify>`;
-        results.verdict = await this._runClaude(reVerifyPrompt, onStream);
+        results.verdict = await this._runClaude(reVerifyPrompt, onStream, options.signal);
         const reVerdictTag = results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown';
         console.log(`[Prove] Re-verify verdict: ${reVerdictTag}`);
       }
@@ -625,8 +653,9 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
 
   /**
    * Run claude CLI in non-interactive (print) mode.
+   * @param {AbortSignal} [signal] — kill the child process on abort (B-03)
    */
-  _runClaude(prompt, onStream) {
+  _runClaude(prompt, onStream, signal = undefined) {
     return new Promise((resolve, reject) => {
       const args = [
         '--print',              // non-interactive, just output the result
@@ -645,6 +674,18 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
 
       let stdout = '';
       let stderr = '';
+      let abortedByCaller = false;
+
+      const onAbort = () => {
+        abortedByCaller = true;
+        try { proc.kill('SIGTERM'); } catch {}
+        // Force-kill if it doesn't exit promptly
+        setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1500);
+      };
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
 
       proc.stdout.on('data', (data) => {
         const text = data.toString();
@@ -656,10 +697,32 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
         stderr += data.toString();
       });
 
-      proc.stdin.write(prompt);
-      proc.stdin.end();
+      // B-06: surface stdin EPIPE instead of letting it bubble as an
+      // uncaught exception on the main process (happens when the child
+      // exits before consuming the full prompt — long prompts, early crash).
+      proc.stdin.on('error', (err) => {
+        if (err.code === 'EPIPE') {
+          console.warn(`[ClaudeCLI] stdin EPIPE — child exited before reading full prompt`);
+        } else {
+          console.warn(`[ClaudeCLI] stdin error: ${err.message}`);
+        }
+      });
+      try {
+        proc.stdin.write(prompt);
+        proc.stdin.end();
+      } catch (err) {
+        // If the child has already exited, write throws synchronously —
+        // fall through; the 'close' handler will deliver the real error.
+        console.warn(`[ClaudeCLI] stdin.write threw: ${err.message}`);
+      }
 
       proc.on('close', (code) => {
+        if (signal) signal.removeEventListener('abort', onAbort);
+        if (abortedByCaller) {
+          const abortErr = new Error('Cancelled');
+          abortErr.code = 'FERMAT_CANCELLED';
+          return reject(abortErr);
+        }
         if (code !== 0 && !stdout) {
           console.error(`[ClaudeCLI] Exit ${code}: ${stderr.slice(0, 400)}`);
           const err = new Error(`Claude CLI exited with code ${code}: ${stderr}`);
@@ -671,6 +734,7 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       });
 
       proc.on('error', (err) => {
+        if (signal) signal.removeEventListener('abort', onAbort);
         console.error(`[ClaudeCLI] Spawn failed: ${err.message}`);
         const wrapped = new Error(`Failed to spawn Claude CLI: ${err.message}`);
         reject(classifyAndAnnotateError(wrapped));
@@ -695,18 +759,33 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     console.log(`[DirectAPI] Using model ${modelId}`);
     const results = {};
 
-    // Helper: run a single API call with a system prompt and user prompt
+    // Helper: run a single API call with a system prompt and user prompt.
+    // B-03: honour options.signal — abort mid-stream if the caller cancels.
     const runApi = async (systemPrompt, userPrompt, phaseLabel = 'call') => {
+      if (options.signal?.aborted) {
+        const err = new Error('Cancelled before API call');
+        err.code = 'FERMAT_CANCELLED';
+        throw err;
+      }
       const t0 = Date.now();
       let fullText = '';
       try {
-        const stream = await client.messages.stream({
-          model: modelId,
-          max_tokens: 8192,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userPrompt }],
-        });
+        const stream = await client.messages.stream(
+          {
+            model: modelId,
+            max_tokens: 8192,
+            system: systemPrompt,
+            messages: [{ role: 'user', content: userPrompt }],
+          },
+          options.signal ? { signal: options.signal } : undefined,
+        );
         for await (const event of stream) {
+          if (options.signal?.aborted) {
+            try { stream.controller?.abort?.(); } catch {}
+            const err = new Error('Cancelled mid-stream');
+            err.code = 'FERMAT_CANCELLED';
+            throw err;
+          }
           if (event.type === 'content_block_delta' && event.delta?.text) {
             fullText += event.delta.text;
             if (onStream) onStream(event.delta.text);
@@ -715,6 +794,11 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
         console.log(`[DirectAPI] ${phaseLabel} done (${Date.now()-t0}ms, ${fullText.length}ch)`);
         return fullText;
       } catch (err) {
+        if (options.signal?.aborted) {
+          const abortErr = new Error('Cancelled');
+          abortErr.code = 'FERMAT_CANCELLED';
+          throw abortErr;
+        }
         console.error(`[DirectAPI] ${phaseLabel} failed: ${err.message}`);
         throw classifyAndAnnotateError(err);
       }

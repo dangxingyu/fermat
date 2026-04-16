@@ -95,6 +95,12 @@ contextBridge.exposeInMainWorld('api', {
     parse: (content) => ipcRenderer.invoke('outline:parse', content),
   },
 
+  // Persistent settings — hydrate the Settings modal on mount so the user's
+  // API key, model choice, tex engine, lean config, etc. survive restarts.
+  settings: {
+    load: () => ipcRenderer.invoke('settings:load'),
+  },
+
   // Main-process log stream
   log: {
     getBuffer: () => ipcRenderer.invoke('log:get-buffer'),
