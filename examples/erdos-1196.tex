@@ -1,0 +1,158 @@
+\documentclass{article}
+\usepackage{amsmath, amssymb, amsthm}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\newtheorem{conjecture}[theorem]{Conjecture}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+
+\title{Erdős Problem \#1196: Primitive Sets and Logarithmic Density}
+\author{Fermat Test Harness}
+\date{}
+
+% ── Context ────────────────────────────────────────────────────────────────
+%   Erdős Problem #1196 asks whether the primitive-set sum
+%     S(A) = sum_{a in A} 1 / (a log a)
+%   is bounded by 1 + o(1) whenever A lies in [x, infty). The bound is trivial
+%   for primes (by Mertens), and Erdős proved in 1935 that S(A) is uniformly
+%   bounded over all primitive A ⊂ N. Lichtman later pushed the constant
+%   down to ~1.399. The full conjecture was recently resolved: for any
+%   primitive A ⊂ [x, infty), S(A) ≤ 1 + O(1/log x). Formalized in Lean.
+%
+%   This file is a graduated test for Fermat's proof pipeline:
+%     • Easy   → definitions + trivial observations
+%     • Medium → Erdős 1935 boundedness + Mertens on primes
+%     • Hard   → the main Erdős-Sárközy-Szemerédi 1+o(1) conjecture itself
+% ────────────────────────────────────────────────────────────────────────────
+
+\begin{document}
+\maketitle
+
+\section{Primitive Sets}
+
+\begin{definition}[Primitive Set]
+\label{def:primitive}
+A set $A \subseteq \mathbb{N}_{\geq 2}$ is \emph{primitive} if no element of
+$A$ properly divides another; equivalently, for all distinct $a, b \in A$
+we have $a \nmid b$.
+\end{definition}
+
+\begin{definition}[Primitive-set sum]
+\label{def:sum-S}
+For a primitive set $A \subseteq \mathbb{N}_{\geq 2}$, define
+\[
+  S(A) \;:=\; \sum_{a \in A} \frac{1}{a \log a}.
+\]
+\end{definition}
+
+\begin{lemma}[Set of primes is primitive]
+\label{lem:primes-primitive}
+The set of prime numbers $\mathbb{P} = \{2, 3, 5, 7, 11, \ldots\}$
+is a primitive subset of $\mathbb{N}_{\geq 2}$.
+\end{lemma}
+% [PROVE IT: Easy]
+% SKETCH: Two distinct primes p != q cannot satisfy p | q, since the only
+%   positive divisors of a prime q are 1 and q, and p > 1, p != q.
+
+\begin{lemma}[Subsets of primitive sets are primitive]
+\label{lem:subset-primitive}
+If $A$ is primitive and $B \subseteq A$, then $B$ is primitive.
+\end{lemma}
+% [PROVE IT: Easy]
+% SKETCH: Any pair in B is also a pair in A, so the non-divisibility
+%   property is inherited.
+
+\section{The Prime Case (Mertens)}
+
+\begin{lemma}[Mertens' second theorem]
+\label{lem:mertens}
+As $x \to \infty$,
+\[
+  \sum_{p \leq x,\, p \text{ prime}} \frac{1}{p} \;=\; \log \log x + M + O\!\left(\frac{1}{\log x}\right),
+\]
+where $M \approx 0.2615$ is the Meissel--Mertens constant.
+\end{lemma}
+% [PROVE IT: Hard]
+% SKETCH: Standard PNT-adjacent estimate. Use partial summation against
+%   theta(x) = sum_{p <= x} log p, together with the PNT-style bound
+%   theta(x) = x + O(x / log x), to convert sum 1/p into an integral
+%   form and evaluate.
+
+\begin{proposition}[Primes satisfy the bound]
+\label{prop:primes-bound}
+For primes $\mathbb{P}_x := \mathbb{P} \cap [x, \infty)$,
+\[
+  S(\mathbb{P}_x) \;=\; \sum_{p \geq x} \frac{1}{p \log p} \;=\; O\!\left(\frac{1}{\log x}\right)
+  \qquad \text{as } x \to \infty.
+\]
+In particular $S(\mathbb{P}_x) = o(1)$.
+\end{proposition}
+% [PROVE IT: Medium]
+% SKETCH: Partial summation. Let pi(t) be the prime counting function;
+%   use pi(t) = O(t / log t) (Chebyshev/PNT) and integrate 1/(t log^2 t)
+%   from x to infinity to get a 1/log x bound.
+
+\section{Erdős' Boundedness Theorem (1935)}
+
+\begin{theorem}[Erdős, 1935]
+\label{thm:erdos-1935}
+There exists an absolute constant $C > 0$ such that for every primitive
+set $A \subseteq \mathbb{N}_{\geq 2}$,
+\[
+  S(A) \;=\; \sum_{a \in A} \frac{1}{a \log a} \;\leq\; C.
+\]
+\end{theorem}
+% [PROVE IT: Hard]
+% SKETCH: Classical argument. For each a in A, associate the "multiplicative
+%   interval" M_a = { n in N : a | n, n/a has all prime factors < p(a) },
+%   where p(a) is the smallest prime factor of a. The M_a are pairwise
+%   disjoint (this uses primitivity of A), and sum_{n in M_a} 1/n is
+%   comparable to 1/(a log a) via Mertens applied to the primes < p(a).
+%   Summing over a and bounding by the total harmonic sum up to N gives
+%   S(A) = O(1).
+
+\begin{corollary}[Finite primitive sum]
+\label{cor:finite-sum}
+For every primitive set $A \subseteq \mathbb{N}_{\geq 2}$ the sum
+$\sum_{a \in A} 1/(a \log a)$ converges.
+\end{corollary}
+% [PROVE IT: Easy]
+
+\section{The Erdős--Sárközy--Szemerédi Conjecture}
+
+\begin{conjecture}[Erdős--Sárközy--Szemerédi; now Theorem, Price 2026]
+\label{thm:erdos-1196}
+For every $x \geq 2$ and every primitive set $A \subseteq [x, \infty)$,
+\[
+  S(A) \;=\; \sum_{a \in A} \frac{1}{a \log a} \;\leq\; 1 + O\!\left(\frac{1}{\log x}\right).
+\]
+Consequently, $\sup_{A \subset [x,\infty) \text{ primitive}} S(A) = 1 + o(1)$
+as $x \to \infty$.
+\end{conjecture}
+% [PROVE IT: Hard]
+% SKETCH: This is the main Erdős Problem #1196. The idea (per Price's
+%   recent argument) is to reduce to a "critical" family of primitive sets
+%   parametrised by a Markov-style branching structure on the anatomy
+%   of integers, and then estimate the supremum of S over that family
+%   using Mertens (Lemma~\ref{lem:mertens}) and the Chebyshev bound on
+%   pi(x). The prime case (Proposition~\ref{prop:primes-bound}) is the
+%   extremal configuration: primes achieve the 1 + O(1/log x) rate and
+%   any deviation from the prime-like structure decreases S.
+
+\begin{corollary}[Matching lower bound]
+\label{cor:lower-bound}
+The bound in Theorem~\ref{thm:erdos-1196} is tight: the set of primes
+in $[x, \infty)$ gives $S(\mathbb{P}_x) = 1 - o(1)$ is \emph{not} achieved,
+but the family of "primes times a fixed integer" approaches $1$.
+\end{corollary}
+% [PROVE IT: Medium]
+% SKETCH: For k >= 1 fixed, the set A_k = { kp : p prime, kp >= x }
+%   is primitive (distinct primes do not divide each other, and the
+%   common factor k is shared). Evaluate S(A_k) using Mertens and
+%   compare against 1 as k varies. The supremum over such families
+%   realises the constant 1.
+
+\end{document}
