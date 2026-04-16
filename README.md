@@ -6,17 +6,10 @@ Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, a
 
 ---
 
-## Screenshot
-
-<!-- TODO(xingyu): replace with actual screenshot -->
-![Fermat editor screenshot](docs/screenshot.png)
-
----
-
 ## Installation
 
 ```bash
-git clone https://github.com/TODO/fermat.git   # TODO(xingyu): fill repo URL
+git clone https://github.com/dangxingyu/fermat.git
 cd fermat
 npm install
 ```
@@ -120,14 +113,18 @@ fermat/
 │   │   ├── copilot-engine.js  # Proof task queue & orchestration
 │   │   ├── claude-code-backend.js  # Claude CLI / direct API backend
 │   │   ├── context-assembler.js    # Structured context for proofs
-│   │   └── tex-compiler.js    # pdflatex / xelatex / lualatex runner
+│   │   ├── outline-parser.js  # LaTeX structure + PROVE IT marker parser
+│   │   ├── tex-compiler.js    # pdflatex / xelatex / lualatex runner
+│   │   ├── synctex-bridge.js  # SyncTeX forward/inverse search
+│   │   └── lean-runner.js     # Lean 4 verification (core + mathlib modes)
 │   └── renderer/              # React UI (Vite)
-│       ├── components/        # App, TexEditor, PdfViewer, ProofReviewPanel …
+│       ├── components/        # App, TexEditor, PdfViewer, LeanPanel, ProofReviewPanel …
 │       └── hooks/             # useCopilot, useOutline
 ├── .claude/skills/            # Fermat skill prompts
 │   ├── fermat-sketch/         # Phase 1: plan the proof strategy
 │   ├── fermat-prove/          # Phase 2: write the full LaTeX proof
 │   └── fermat-verify/         # Phase 3: LLM-as-judge verification
+├── lean-workspace/            # Lake project with mathlib for Lean verification
 ├── examples/                  # Sample .tex documents with PROVE IT markers
 ├── fermat-skills-workspace/   # Eval benchmark results
 └── landing/                   # Static landing page
@@ -144,8 +141,17 @@ For each `% [PROVE IT: X]` marker:
 
 The backend prefers the **Claude Code CLI** (`claude --print`) for agent-level reasoning; it falls back to the **Anthropic SDK** (direct API) when the CLI is not installed.
 
+### Lean 4 verification (optional)
+
+Fermat can additionally verify proofs against a real Lean 4 type-checker. When Lean is installed (`elan` / `lean --version`), switching the task to **Lean mode** runs a `sketch → fill → sorrify` pipeline: the model drafts a Lean statement, fills the proof body, and any remaining `sorry`s are flagged back in the UI.
+
+- **Core-only mode** — fast (~1–3 s), uses Lean core + Std only.
+- **Mathlib mode** — uses the `lean-workspace/` lake project with mathlib as a dependency. Run `lake exe cache get` inside `lean-workspace/` once to populate the cache.
+
+The Lean panel (right tab, next to the PDF) shows the generated statement for you to confirm / edit before the proof fill runs.
+
 ---
 
 ## License
 
-MIT © TODO(xingyu)
+MIT © Xingyu Dang
