@@ -1,0 +1,38 @@
+{
+  "eval_id": 5,
+  "eval_name": "sketch-hard-fta",
+  "variant": "with_skill",
+  "expectations": [
+    {
+      "text": "Contains <strategy> section",
+      "passed": true,
+      "evidence": "checked for strategy section"
+    },
+    {
+      "text": "Contains <prerequisites> section",
+      "passed": true,
+      "evidence": "checked for prerequisites section"
+    },
+    {
+      "text": "Contains <key_steps> section",
+      "passed": true,
+      "evidence": "checked for key_steps section"
+    },
+    {
+      "text": "Contains <complexity> section",
+      "passed": true,
+      "evidence": "checked for complexity section"
+    },
+    {
+      "text": "Strategy mentions induction",
+      "passed": true,
+      "evidence": "found induction"
+    },
+    {
+      "text": "Prerequisites identify that Euclid's lemma is needed",
+      "passed": true,
+      "evidence": "found Euclid's lemma reference"
+    }
+  ],
+  "pass_rate": 1
+}

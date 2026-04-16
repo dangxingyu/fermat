@@ -1,0 +1,7 @@
+{"eval_id": 1, "eval_name": "prove-easy-inf-primes", "prompt": "Prove the Infinitude of Primes (Easy)", "assertions": [
+  {"text": "Contains \\begin{proof} and \\end{proof}", "type": "contains"},
+  {"text": "Uses contradiction or constructive argument", "type": "semantic"},
+  {"text": "Proof is concise (under 10 substantive lines)", "type": "length"},
+  {"text": "No markdown fences or commentary outside the proof", "type": "format"},
+  {"text": "Does not restate the theorem statement", "type": "format"}
+]}

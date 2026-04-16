@@ -1,0 +1,5 @@
+{"eval_id": 3, "eval_name": "verify-good-fta", "prompt": "Verify a correct proof of FTA (expect PASS or NEEDS_REVISION)", "assertions": [
+  {"text": "Verdict is PASS or NEEDS_REVISION (not FAIL)", "type": "semantic"},
+  {"text": "Contains <issues> section", "type": "contains"},
+  {"text": "Issues are tagged with severity levels [critical/major/minor]", "type": "format"}
+]}

@@ -1,0 +1,71 @@
+{
+  "skill_name": "fermat-prove",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Prove the Infinitude of Primes theorem (Easy difficulty). The theorem states: There are infinitely many prime numbers.",
+      "expected_output": "A concise proof using Euclid's classic argument (contradiction), 3-8 lines, in \\begin{proof}...\\end{proof} format",
+      "files": [],
+      "expectations": [
+        "Output contains \\begin{proof} and \\end{proof}",
+        "Proof uses contradiction or constructive argument",
+        "Proof is concise (under 10 lines of math)",
+        "No markdown fences or commentary outside the proof",
+        "Does not restate the theorem"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Prove the Fundamental Theorem of Arithmetic (Hard difficulty). The theorem states: Every integer n > 1 can be written uniquely as a product of prime numbers. Dependencies: Division Lemma, Definition of Prime.",
+      "expected_output": "A thorough proof covering both existence (by strong induction) and uniqueness (using Euclid's lemma), 20+ lines, referencing \\ref{lem:division} and \\ref{def:prime}",
+      "files": [],
+      "expectations": [
+        "Output contains \\begin{proof} and \\end{proof}",
+        "Proof addresses both existence AND uniqueness",
+        "Proof uses induction for existence",
+        "Proof establishes or invokes Euclid's lemma for uniqueness",
+        "Proof references \\ref{lem:division} or \\ref{def:prime}",
+        "Proof is detailed (20+ lines)",
+        "No markdown fences or commentary outside the proof"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Verify a correct proof of FTA (expect PASS or NEEDS_REVISION, not FAIL)",
+      "expected_output": "A verdict of PASS or NEEDS_REVISION with constructive feedback",
+      "files": [],
+      "expectations": [
+        "Output contains <verdict>PASS</verdict> or <verdict>NEEDS_REVISION</verdict>",
+        "Output does NOT contain <verdict>FAIL</verdict>",
+        "Output contains <issues> section",
+        "Issues are tagged with severity levels"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "Verify a broken proof of FTA that skips Euclid's lemma (expect FAIL)",
+      "expected_output": "A verdict of FAIL identifying the missing Euclid's lemma as a critical gap",
+      "files": [],
+      "expectations": [
+        "Output contains <verdict>FAIL</verdict>",
+        "Issues mention Euclid's lemma or the unjustified claim that p divides some q_j",
+        "At least one [critical] issue is identified",
+        "Output contains <corrected_proof> section"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "Sketch a proof strategy for FTA (Hard difficulty)",
+      "expected_output": "A structured sketch identifying strong induction for existence, Euclid's lemma as a prerequisite for uniqueness, and estimating the proof as long/complex",
+      "files": [],
+      "expectations": [
+        "Output contains <strategy> section",
+        "Output contains <prerequisites> section",
+        "Output contains <key_steps> section",
+        "Output contains <complexity> section",
+        "Strategy mentions induction",
+        "Prerequisites identify that Euclid's lemma is needed"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+\begin{proof}
+We prove both existence and uniqueness of the prime factorization.
+
+\textbf{Step 1: Existence.}
+We proceed by strong induction on $n$. If $n > 1$ is itself prime (Definition~\ref{def:prime}), then $n$ is already a product of one prime, and we are done. Otherwise $n$ is composite, meaning there exist integers $a, b$ with $1 < a, b < n$ and $n = ab$. By the strong induction hypothesis, both $a$ and $b$ can each be written as a product of primes, so their product $n = ab$ is also a product of primes. This completes the induction.
+
+\textbf{Step 2: A key divisibility property of primes.}
+We establish the following claim, which is the essential ingredient for uniqueness.
+
+\textit{Claim:} If $p$ is prime and $p \mid a_1 a_2 \cdots a_k$, then $p \mid a_i$ for some $i$.
+
+It suffices to show: if $p$ is prime and $p \mid ab$, then $p \mid a$ or $p \mid b$. Suppose $p \nmid a$. Since the only positive divisors of $p$ are $1$ and $p$ (Definition~\ref{def:prime}), we have $\gcd(p, a) = 1$. By Lemma~\ref{lem:division} (applied iteratively to obtain the Euclidean algorithm), there exist integers $s, t$ such that $sp + ta = 1$. Multiplying both sides by $b$ gives $spb + tab = b$. Since $p \mid spb$ and $p \mid ab$ implies $p \mid tab$, we conclude $p \mid b$. The general case $p \mid a_1 \cdots a_k$ follows by induction on $k$.
+
+\textbf{Step 3: Uniqueness.}
+Suppose $n$ has two prime factorizations:
+\[
+    p_1 p_2 \cdots p_r = n = q_1 q_2 \cdots q_s,
+\]
+where each $p_i$ and $q_j$ is prime. We show $r = s$ and (after reordering) $p_i = q_i$ for all $i$, by induction on $r$.
+
+If $r = 1$, then $n = p_1$ is prime, and $q_1 \cdots q_s = p_1$. Since each $q_j > 1$, we must have $s = 1$ and $q_1 = p_1$.
+
+For $r > 1$: since $p_1 \mid q_1 q_2 \cdots q_s$, the claim in Step 2 implies $p_1 \mid q_j$ for some $j$. Reindex so that $j = 1$. Since $q_1$ is prime, its only positive divisors are $1$ and $q_1$, so $p_1 = q_1$. Cancelling $p_1 = q_1$ from both sides gives
+\[
+    p_2 \cdots p_r = q_2 \cdots q_s.
+\]
+The left-hand side is a product of $r - 1$ primes. By the induction hypothesis, $r - 1 = s - 1$ and (after reordering) $p_i = q_i$ for $2 \leq i \leq r$. Hence $r = s$ and the two factorizations are identical up to order.
+
+Combining Steps 1 and 3, every integer $n > 1$ has a unique representation as a product of primes, up to the order of factors.
+\end{proof}

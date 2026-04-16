@@ -1,0 +1,28 @@
+{
+  "eval_id": 4,
+  "eval_name": "verify-bad-fta",
+  "variant": "with_skill",
+  "expectations": [
+    {
+      "text": "Verdict is FAIL",
+      "passed": true,
+      "evidence": "found FAIL or equivalent"
+    },
+    {
+      "text": "Identifies missing Euclid's lemma as a critical issue",
+      "passed": true,
+      "evidence": "found Euclid's lemma reference"
+    },
+    {
+      "text": "Contains at least one [critical] issue",
+      "passed": true,
+      "evidence": "checked for critical issues"
+    },
+    {
+      "text": "Contains <corrected_proof> section",
+      "passed": true,
+      "evidence": "checked for corrected_proof section"
+    }
+  ],
+  "pass_rate": 1
+}

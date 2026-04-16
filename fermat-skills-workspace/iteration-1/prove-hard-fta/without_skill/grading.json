@@ -1,0 +1,43 @@
+{
+  "eval_id": 2,
+  "eval_name": "prove-hard-fta",
+  "variant": "without_skill",
+  "expectations": [
+    {
+      "text": "Contains \\begin{proof} and \\end{proof}",
+      "passed": true,
+      "evidence": "checked for proof environment"
+    },
+    {
+      "text": "Addresses both existence AND uniqueness",
+      "passed": true,
+      "evidence": "both parts addressed"
+    },
+    {
+      "text": "Uses induction for existence",
+      "passed": true,
+      "evidence": "found induction"
+    },
+    {
+      "text": "Establishes or invokes Euclid's lemma for uniqueness",
+      "passed": true,
+      "evidence": "found Euclid's lemma reference"
+    },
+    {
+      "text": "References \\ref{lem:division} or \\ref{def:prime}",
+      "passed": false,
+      "evidence": "no \\ref citations found"
+    },
+    {
+      "text": "Proof is detailed (20+ lines)",
+      "passed": true,
+      "evidence": "46 non-empty lines"
+    },
+    {
+      "text": "No markdown fences outside the proof",
+      "passed": true,
+      "evidence": "no markdown fences"
+    }
+  ],
+  "pass_rate": 0.8571428571428571
+}

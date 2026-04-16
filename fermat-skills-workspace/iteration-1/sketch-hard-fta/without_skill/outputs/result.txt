@@ -1,0 +1,83 @@
+# Proof Strategy: Fundamental Theorem of Arithmetic
+
+## Theorem Statement
+Every integer $n > 1$ can be written as a product of primes, and this representation is unique up to reordering of factors.
+
+---
+
+## Decomposition into Two Sub-Claims
+
+The theorem has two logically independent parts requiring separate arguments:
+
+1. **Existence:** Every $n > 1$ has *at least one* prime factorization.
+2. **Uniqueness:** Every $n > 1$ has *at most one* prime factorization (up to reordering).
+
+---
+
+## Approach
+
+- **Existence:** Strong induction (also called complete induction) on $n$.
+- **Uniqueness:** Contradiction, leveraging a critical divisibility lemma derived from the Division Lemma.
+
+---
+
+## Prerequisites
+
+| Tool | Role |
+|------|------|
+| Division Lemma (Bézout) | Backbone of uniqueness; used to prove the key lemma below |
+| Definition of prime | A prime $p > 1$ has no divisors other than $1$ and $p$ |
+| Well-ordering of $\mathbb{N}$ | Grounds the induction and any minimal-counterexample argument |
+
+> **Key Lemma (Euclid's Lemma) — must be established first:**
+> $$p \mid ab \implies p \mid a \;\text{ or }\; p \mid b$$
+> *This does not follow from the definition of prime alone; it requires the Division Lemma to obtain the Bézout identity $\gcd(p,a) = 1 \Rightarrow \exists\, s,t: sp + ta = 1$, then multiply through by $b$.*
+
+---
+
+## Key Steps
+
+### Part 1 — Existence (Strong Induction)
+
+1. **Base case:** $n = 2$ is itself prime; the factorization $\{2\}$ exists. ✓
+2. **Inductive step:** Assume every integer $2 \leq k < n$ has a prime factorization.
+   - If $n$ is prime: $n$ itself is the factorization. ✓
+   - If $n$ is composite: by definition $n = ab$ with $1 < a, b < n$.
+   - By the inductive hypothesis, $a$ and $b$ each have prime factorizations.
+   - Concatenating them yields a prime factorization of $n$. ✓
+
+*Why strong (not simple) induction?* The factors $a, b$ may be far from $n-1$; we need the hypothesis at all values below $n$.
+
+---
+
+### Part 2 — Uniqueness (Contradiction + Euclid's Lemma)
+
+1. **Assume non-uniqueness.** Suppose $n$ is the *smallest* integer $> 1$ with two distinct factorizations:
+$$p_1 p_2 \cdots p_r = n = q_1 q_2 \cdots q_s$$
+with primes $p_i, q_j$ and the two lists genuinely differing.
+
+2. **No common factors between lists.** If $p_1 = q_j$ for some $j$, cancel it from both sides; the resulting integer $n/p_1 < n$ also has two distinct factorizations, contradicting minimality of $n$. Hence no $p_i$ equals any $q_j$.
+
+3. **Apply Euclid's Lemma.** Since $p_1 \mid q_1 q_2 \cdots q_s$, repeated application of Euclid's Lemma gives $p_1 \mid q_j$ for some $j$. But $q_j$ is prime, so $p_1 = q_j$ — **contradiction** with Step 2.
+
+4. **Conclusion.** No such $n$ exists; uniqueness holds for all $n > 1$.
+
+---
+
+## Potential Difficulties
+
+| Difficulty | Mitigation |
+|------------|------------|
+| **Euclid's Lemma is non-trivial** | Must be proved separately before uniqueness; it is the deepest step and is *the* place the Division Lemma enters |
+| **Conflating "irreducible" with "prime"** | In $\mathbb{Z}$ these coincide, but the proof must use the *prime* (divisibility) property, not just irreducibility (no factorization) |
+| **Induction variant** | Must consciously use *strong* induction in Part 1, not simple induction |
+| **Uniqueness base case** | The minimality argument implicitly handles the base; be explicit that $n=2$ is trivially unique |
+| **"Up to reordering" clause** | Must state what uniqueness *means* precisely; a formal proof requires either sorting the primes or invoking a permutation argument |
+
+---
+
+## Logical Dependency Chain
+
+$$\text{Division Lemma} \;\Longrightarrow\; \text{Euclid's Lemma} \;\Longrightarrow\; \text{Uniqueness}$$
+$$\text{Strong Induction} \;\Longrightarrow\; \text{Existence}$$
+$$\text{Existence} + \text{Uniqueness} \;\Longrightarrow\; \textbf{FTA}$$

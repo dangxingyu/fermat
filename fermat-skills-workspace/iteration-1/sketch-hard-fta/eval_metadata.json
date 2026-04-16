@@ -1,0 +1,8 @@
+{"eval_id": 5, "eval_name": "sketch-hard-fta", "prompt": "Sketch a proof strategy for FTA (Hard)", "assertions": [
+  {"text": "Contains <strategy> section", "type": "contains"},
+  {"text": "Contains <prerequisites> section", "type": "contains"},
+  {"text": "Contains <key_steps> section", "type": "contains"},
+  {"text": "Contains <complexity> section", "type": "contains"},
+  {"text": "Strategy mentions induction", "type": "semantic"},
+  {"text": "Prerequisites identify that Euclid's lemma is needed", "type": "semantic"}
+]}

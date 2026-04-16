@@ -1,0 +1,23 @@
+{
+  "eval_id": 3,
+  "eval_name": "verify-good-fta",
+  "variant": "without_skill",
+  "expectations": [
+    {
+      "text": "Verdict is PASS or NEEDS_REVISION (not FAIL)",
+      "passed": false,
+      "evidence": "no structured verdict found, checking text"
+    },
+    {
+      "text": "Contains <issues> section",
+      "passed": false,
+      "evidence": "checked for issues section"
+    },
+    {
+      "text": "Issues are tagged with severity levels [critical/major/minor]",
+      "passed": false,
+      "evidence": "checked for severity tags"
+    }
+  ],
+  "pass_rate": 0
+}

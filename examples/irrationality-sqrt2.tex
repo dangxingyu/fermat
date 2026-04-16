@@ -1,0 +1,61 @@
+\documentclass{article}
+\usepackage{amsmath, amssymb, amsthm}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+
+\title{Irrationality of $\sqrt{2}$ and Friends}
+\author{Fermat Demo}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ── Open this file in Fermat and click "Submit All" to see the full pipeline.
+% ── The Hard theorem will go through sketch → prove → verify before review.
+
+\section{Setup}
+
+\begin{definition}[Rational Number]
+\label{def:rational}
+A real number $x$ is \emph{rational} if there exist integers $p, q$ with
+$q \neq 0$ such that $x = p/q$.  We say $x$ is \emph{irrational} otherwise.
+\end{definition}
+
+\begin{lemma}[Parity lemma]
+\label{lem:parity}
+For any integer $n$, if $n^2$ is even then $n$ is even.
+\end{lemma}
+% [PROVE IT: Easy]
+
+\section{Main Results}
+
+\begin{theorem}[Irrationality of $\sqrt{2}$]
+\label{thm:sqrt2}
+$\sqrt{2}$ is irrational.
+\end{theorem}
+% [PROVE IT: Easy]
+% SKETCH: Assume sqrt(2) = p/q in lowest terms. Then 2q^2 = p^2, so p^2 is
+%   even, hence p is even by Lemma~\ref{lem:parity}. Write p = 2k; then
+%   2q^2 = 4k^2, so q^2 = 2k^2, meaning q is also even — contradicting lowest terms.
+
+\begin{theorem}[Irrationality of $\sqrt{p}$ for primes $p$]
+\label{thm:sqrt-prime}
+Let $p$ be a prime number.  Then $\sqrt{p}$ is irrational.
+\end{theorem}
+% [PROVE IT: Medium]
+
+\begin{corollary}[Density of irrationals]
+\label{cor:dense}
+Between any two distinct real numbers there exists an irrational number.
+\end{corollary}
+% [PROVE IT: Hard]
+% SKETCH: Let a < b. WLOG assume a, b >= 0 (the negative case is symmetric).
+%   The interval (a/sqrt(2), b/sqrt(2)) contains a rational r = p/q (by density
+%   of rationals). Then r*sqrt(2) = p*sqrt(2)/q lies in (a, b) and is irrational
+%   by Theorem~\ref{thm:sqrt2} (since p != 0).
+
+\end{document}

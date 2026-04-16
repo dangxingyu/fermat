@@ -1,0 +1,33 @@
+{
+  "eval_id": 1,
+  "eval_name": "prove-easy-inf-primes",
+  "variant": "without_skill",
+  "expectations": [
+    {
+      "text": "Contains \\begin{proof} and \\end{proof}",
+      "passed": true,
+      "evidence": "checked for proof environment"
+    },
+    {
+      "text": "Uses contradiction or constructive argument",
+      "passed": true,
+      "evidence": "found proof technique"
+    },
+    {
+      "text": "Proof is concise (under 10 substantive lines)",
+      "passed": true,
+      "evidence": "7 non-empty lines"
+    },
+    {
+      "text": "No markdown fences or commentary outside the proof",
+      "passed": true,
+      "evidence": "no markdown fences"
+    },
+    {
+      "text": "Does not restate the theorem statement",
+      "passed": true,
+      "evidence": "theorem not restated"
+    }
+  ],
+  "pass_rate": 1
+}

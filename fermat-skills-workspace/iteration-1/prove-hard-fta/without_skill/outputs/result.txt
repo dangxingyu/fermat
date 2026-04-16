@@ -1,0 +1,62 @@
+\begin{proof}
+We prove both existence and uniqueness of the prime factorization.
+
+\medskip
+\noindent\textbf{Part 1: Existence.}
+
+We show by strong induction that every integer $n > 1$ can be written as a product of primes.
+
+\textit{Base case:} $n = 2$. Since $2$ is prime, it is already a product of primes (with one factor).
+
+\textit{Inductive step:} Let $n > 2$, and suppose every integer $m$ with $1 < m < n$ can be written as a product of primes. We consider two cases:
+\begin{itemize}
+    \item If $n$ is prime, then $n$ itself is a product of primes.
+    \item If $n$ is not prime, then by definition there exist integers $a, b$ with $1 < a, b < n$ such that $n = ab$. By the induction hypothesis, both $a$ and $b$ can be written as products of primes, say $a = p_1 p_2 \cdots p_k$ and $b = q_1 q_2 \cdots q_l$. Then
+    \[
+        n = p_1 p_2 \cdots p_k \, q_1 q_2 \cdots q_l
+    \]
+    is a product of primes.
+\end{itemize}
+In both cases $n$ is a product of primes, completing the induction.
+
+\medskip
+\noindent\textbf{Lemma (Euclid's Lemma):} \textit{If $p$ is prime and $p \mid ab$, then $p \mid a$ or $p \mid b$.}
+
+\begin{proof}[Proof of Lemma]
+Suppose $p \mid ab$ and $p \nmid a$. Since $p$ is prime, its only positive divisors are $1$ and $p$. Because $p \nmid a$, we have $\gcd(p, a) = 1$. We claim $p \mid b$.
+
+Since $\gcd(p,a) = 1$, there exist integers $s, t$ such that $sp + ta = 1$ (this follows from the Division Lemma applied repeatedly, i.e., the Euclidean algorithm, which produces the gcd as a linear combination). Multiplying both sides by $b$:
+\[
+    spb + tab = b.
+\]
+Now $p \mid spb$ (trivially) and $p \mid tab$ (since $p \mid ab$). Therefore $p \mid b$.
+\end{proof}
+
+By induction, Euclid's Lemma extends to: if $p$ is prime and $p \mid a_1 a_2 \cdots a_k$, then $p \mid a_i$ for some $i$. In particular, if $p \mid q_1 q_2 \cdots q_k$ where each $q_i$ is prime, then $p = q_i$ for some $i$ (since $p \mid q_i$ and $q_i$ is prime force $p = q_i$).
+
+\medskip
+\noindent\textbf{Part 2: Uniqueness.}
+
+Suppose $n > 1$ has two prime factorizations:
+\[
+    n = p_1 p_2 \cdots p_r = q_1 q_2 \cdots q_s,
+\]
+where $p_1 \leq p_2 \leq \cdots \leq p_r$ and $q_1 \leq q_2 \leq \cdots \leq q_s$ are primes listed in non-decreasing order. We must show $r = s$ and $p_i = q_i$ for all $i$.
+
+We proceed by induction on $r$.
+
+\textit{Base case:} $r = 1$. Then $n = p_1$ is prime. If $s \geq 2$, then $q_1 q_2 \cdots q_s \geq q_1 \cdot q_2 \geq 2 \cdot 2 = 4 > p_1$ is not immediate, but more precisely $q_1 q_2 \cdots q_s$ has $q_1$ as a proper divisor (with quotient $q_2\cdots q_s > 1$), contradicting the primality of $n = p_1$. Hence $s = 1$ and $q_1 = p_1$.
+
+\textit{Inductive step:} Suppose the uniqueness holds whenever a number has a prime factorization of length less than $r$. Consider $n = p_1 p_2 \cdots p_r = q_1 q_2 \cdots q_s$. Since $p_1 \mid n = q_1 q_2 \cdots q_s$, by Euclid's Lemma $p_1 \mid q_j$ for some $j$. Since $q_j$ is prime, $p_1 = q_j$. Because $q_1 \leq q_j = p_1$ and similarly $q_1 \mid p_i$ for some $i$ giving $q_1 = p_i \geq p_1$, we conclude $p_1 = q_1$.
+
+Dividing both sides by $p_1 = q_1$:
+\[
+    \frac{n}{p_1} = p_2 p_3 \cdots p_r = q_2 q_3 \cdots q_s.
+\]
+If $r = 1$ then $n/p_1 = 1$ forces $s = 1$, done. Otherwise $n/p_1 > 1$ has a prime factorization of length $r - 1$. By the induction hypothesis, $r - 1 = s - 1$ (so $r = s$) and $p_i = q_i$ for $i = 2, \ldots, r$.
+
+Together with $p_1 = q_1$, we obtain $r = s$ and $p_i = q_i$ for all $i = 1, \ldots, r$.
+
+\medskip
+\noindent\textbf{Conclusion.} Every integer $n > 1$ can be expressed as a product of primes (existence), and any two such expressions consist of the same primes in the same multiplicities (uniqueness up to order of factors). This completes the proof of the Fundamental Theorem of Arithmetic.
+\end{proof}

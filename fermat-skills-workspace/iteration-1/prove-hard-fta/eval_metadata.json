@@ -1,0 +1,9 @@
+{"eval_id": 2, "eval_name": "prove-hard-fta", "prompt": "Prove the Fundamental Theorem of Arithmetic (Hard)", "assertions": [
+  {"text": "Contains \\begin{proof} and \\end{proof}", "type": "contains"},
+  {"text": "Addresses both existence AND uniqueness", "type": "semantic"},
+  {"text": "Uses induction for existence", "type": "semantic"},
+  {"text": "Establishes or invokes Euclid's lemma for uniqueness", "type": "semantic"},
+  {"text": "References \\ref{lem:division} or \\ref{def:prime}", "type": "contains"},
+  {"text": "Proof is detailed (20+ lines)", "type": "length"},
+  {"text": "No markdown fences outside the proof", "type": "format"}
+]}

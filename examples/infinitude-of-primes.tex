@@ -1,0 +1,55 @@
+\documentclass{article}
+\usepackage{amsmath, amssymb, amsthm}
+
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+
+\title{Infinitude of Primes}
+\author{Fermat Demo}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ── Open this file in Fermat and click "Submit All" to prove all three results.
+
+\section{Foundations}
+
+\begin{definition}[Prime Number]
+\label{def:prime}
+A natural number $p > 1$ is \emph{prime} if its only positive divisors are
+$1$ and $p$ itself.
+\end{definition}
+
+\begin{definition}[Composite Number]
+\label{def:composite}
+A natural number $n > 1$ is \emph{composite} if it is not prime, i.e.\ there
+exist integers $a, b$ with $1 < a, b < n$ such that $n = ab$.
+\end{definition}
+
+\begin{lemma}[Every integer $> 1$ has a prime divisor]
+\label{lem:prime-divisor}
+For every integer $n > 1$ there exists a prime $p$ such that $p \mid n$.
+\end{lemma}
+% [PROVE IT: Easy]
+
+\section{Main Result}
+
+\begin{theorem}[Infinitude of Primes]
+\label{thm:inf-primes}
+There are infinitely many prime numbers.
+\end{theorem}
+% [PROVE IT: Easy]
+% SKETCH: Assume finitely many primes p_1,...,p_k. Consider N = p_1*...*p_k + 1.
+%   By Lemma~\ref{lem:prime-divisor}, N has a prime divisor p.
+%   But p cannot be any p_i (it would divide N - p_1...p_k = 1). Contradiction.
+
+\begin{lemma}[Euclid's Lemma]
+\label{lem:euclid}
+If a prime $p$ divides a product $ab$ of integers, then $p \mid a$ or $p \mid b$.
+\end{lemma}
+% [PROVE IT: Medium]
+
+\end{document}

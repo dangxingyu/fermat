@@ -1,0 +1,7 @@
+\begin{proof}
+Suppose for contradiction that there are only finitely many primes, say $p_1, p_2, \ldots, p_n$. Consider the number
+\[
+N = p_1 p_2 \cdots p_n + 1.
+\]
+Since $N > 1$, it has at least one prime divisor $p$. But for each $p_i$, dividing $N$ by $p_i$ leaves remainder $1$, so $p_i \nmid N$. Thus $p$ is a prime not in our list, contradicting the assumption that $p_1, \ldots, p_n$ were all the primes.
+\end{proof}

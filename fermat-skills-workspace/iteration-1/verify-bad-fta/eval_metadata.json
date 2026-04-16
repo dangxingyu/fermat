@@ -1,0 +1,6 @@
+{"eval_id": 4, "eval_name": "verify-bad-fta", "prompt": "Verify a broken proof of FTA (expect FAIL)", "assertions": [
+  {"text": "Verdict is FAIL", "type": "semantic"},
+  {"text": "Identifies missing Euclid's lemma as a critical issue", "type": "semantic"},
+  {"text": "Contains at least one [critical] issue", "type": "contains"},
+  {"text": "Contains <corrected_proof> section", "type": "contains"}
+]}

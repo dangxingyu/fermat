@@ -1,0 +1,265 @@
+import React, { useEffect, useRef, useState } from 'react';
+import * as monaco from 'monaco-editor';
+import { latexLanguage, latexTheme } from '../utils/latex-language';
+import { registerLaTeXCompletions, LATEX_AUTO_PAIRS } from '../utils/latex-completions';
+
+// ─── Register LaTeX language once at module level ──────────────────
+let languageRegistered = false;
+
+function ensureLanguageRegistered() {
+  if (languageRegistered) return;
+  languageRegistered = true;
+
+  monaco.languages.register({ id: 'latex' });
+  monaco.languages.setMonarchTokensProvider('latex', latexLanguage);
+  monaco.editor.defineTheme('fermat-dark', latexTheme);
+
+  monaco.languages.setLanguageConfiguration('latex', {
+    autoClosingPairs: LATEX_AUTO_PAIRS.autoClosingPairs,
+    surroundingPairs: LATEX_AUTO_PAIRS.surroundingPairs,
+    brackets: LATEX_AUTO_PAIRS.brackets,
+    onEnterRules: [
+      {
+        beforeText: /\\begin\{[^}]*\}\s*$/,
+        action: { indentAction: monaco.languages.IndentAction.Indent },
+      },
+      {
+        afterText: /^\\end\{[^}]*\}/,
+        action: { indentAction: monaco.languages.IndentAction.None, removeText: 1 },
+      },
+    ],
+    comments: {
+      lineComment: '%',
+    },
+    folding: {
+      markers: {
+        start: /\\begin\{/,
+        end: /\\end\{/,
+      },
+    },
+  });
+}
+
+/**
+ * Monaco-based LaTeX editor with:
+ * - LaTeX syntax highlighting
+ * - [PROVE IT: X] marker decorations
+ * - Auto-completion, bracket pairing, environment closing
+ * - Keyboard shortcuts
+ */
+export default function TexEditor({ content, onChange, editorRef, proofTasks, onForwardSearch, onSave, onCompile }) {
+  const containerRef = useRef(null);
+  const editorInstanceRef = useRef(null);
+  const decorationsRef = useRef([]);
+  const [error, setError] = useState(null);
+
+  // Bridge latest callbacks into stable refs so Monaco's command handlers
+  // (registered once) always see the current React state (filePath etc.).
+  const onSaveRef = useRef(onSave);
+  const onCompileRef = useRef(onCompile);
+  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
+  useEffect(() => { onCompileRef.current = onCompile; }, [onCompile]);
+
+  // ─── Initialize editor ───
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    try {
+      ensureLanguageRegistered();
+
+      const editor = monaco.editor.create(containerRef.current, {
+        value: content,
+        language: 'latex',
+        theme: 'fermat-dark',
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+        fontSize: 14,
+        lineHeight: 22,
+        minimap: { enabled: false },
+        wordWrap: 'on',
+        lineNumbers: 'on',
+        renderWhitespace: 'none',
+        bracketPairColorization: { enabled: true },
+        scrollBeyondLastLine: false,
+        padding: { top: 10 },
+        autoClosingBrackets: 'always',
+        autoClosingQuotes: 'always',
+        autoSurround: 'languageDefined',
+        folding: true,
+        foldingStrategy: 'auto',
+        suggest: {
+          showKeywords: true,
+          showSnippets: true,
+          snippetsPreventQuickSuggestions: false,
+          insertMode: 'replace',
+        },
+        quickSuggestions: {
+          other: true,
+          comments: false,
+          strings: true,
+        },
+        snippetSuggestions: 'top',
+        tabCompletion: 'on',
+        acceptSuggestionOnCommitCharacter: true,
+      });
+
+      editorInstanceRef.current = editor;
+      if (editorRef) editorRef.current = editor;
+
+      // Register LaTeX completions
+      const completionDisposables = registerLaTeXCompletions(monaco, editor);
+
+      // Content change handler
+      const contentDisposable = editor.onDidChangeModelContent(() => {
+        onChange(editor.getValue());
+      });
+
+      // Keyboard shortcuts — delegate to App-level handlers so the current
+      // filePath / React state is respected (Cmd+S on an opened file writes
+      // back to that file instead of prompting Save As).
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+        if (onSaveRef.current) onSaveRef.current();
+        else window.api?.file.save({ filePath: null, content: editor.getValue() });
+      });
+
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyB, () => {
+        if (onCompileRef.current) onCompileRef.current();
+        else window.api?.tex.compile({ filePath: null, content: editor.getValue() });
+      });
+
+      // Cmd+' (Cmd+Quote): Forward SyncTeX search — jump to corresponding PDF position
+      editor.addCommand(
+        monaco.KeyMod.CtrlCmd | monaco.KeyCode.Quote,
+        () => { if (onForwardSearch) onForwardSearch(); }
+      );
+
+      // Cmd+K: Insert [PROVE IT: Medium] + SKETCH template after the nearest
+      // enclosing/preceding \end{theorem|lemma|...}. Places cursor at the
+      // SKETCH line so the user can immediately type their hint.
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => {
+        const model = editor.getModel();
+        if (!model) return;
+        const pos = editor.getPosition();
+        if (!pos) return;
+
+        const THEOREM_ENVS = ['theorem', 'lemma', 'proposition', 'corollary',
+          'definition', 'conjecture', 'claim', 'remark'];
+        const END_RE = new RegExp(`\\\\end\\{(${THEOREM_ENVS.join('|')})\\}`, 'i');
+
+        // Walk from current line downward to find \end{theorem|...}; if not
+        // found, walk upward. Prefer the nearest \end below (user typed
+        // the theorem and cursor is inside it), otherwise nearest above.
+        let targetLine = null;
+        const totalLines = model.getLineCount();
+        for (let l = pos.lineNumber; l <= Math.min(pos.lineNumber + 40, totalLines); l++) {
+          if (END_RE.test(model.getLineContent(l))) { targetLine = l; break; }
+        }
+        if (targetLine === null) {
+          for (let l = pos.lineNumber - 1; l >= Math.max(1, pos.lineNumber - 40); l--) {
+            if (END_RE.test(model.getLineContent(l))) { targetLine = l; break; }
+          }
+        }
+
+        const insertAtLine = targetLine !== null ? targetLine + 1 : pos.lineNumber;
+        const template = '% [PROVE IT: Medium]\n% SKETCH: \n';
+        const range = new monaco.Range(insertAtLine, 1, insertAtLine, 1);
+
+        editor.executeEdits('fermat-insert-sketch', [{
+          range,
+          text: template,
+          forceMoveMarkers: true,
+        }]);
+
+        // Place cursor at end of the SKETCH: line (insertAtLine + 1)
+        const sketchLineNum = insertAtLine + 1;
+        const sketchLineLen = model.getLineLength(sketchLineNum);
+        editor.setPosition({ lineNumber: sketchLineNum, column: sketchLineLen + 1 });
+        editor.focus();
+      });
+
+      // Handle resize
+      const resizeObserver = new ResizeObserver(() => editor.layout());
+      resizeObserver.observe(containerRef.current);
+
+      return () => {
+        resizeObserver.disconnect();
+        contentDisposable.dispose();
+        completionDisposables.forEach(d => d.dispose());
+        editor.dispose();
+        editorInstanceRef.current = null;
+      };
+    } catch (err) {
+      console.error('Failed to initialize Monaco editor:', err);
+      setError(err.message);
+    }
+  }, []); // Only init once
+
+  // ─── Sync external content changes ───
+  useEffect(() => {
+    const editor = editorInstanceRef.current;
+    if (editor && editor.getValue() !== content) {
+      const position = editor.getPosition();
+      editor.setValue(content);
+      if (position) editor.setPosition(position);
+    }
+  }, [content]);
+
+  // ─── Update decorations for [PROVE IT] markers ───
+  useEffect(() => {
+    const editor = editorInstanceRef.current;
+    if (!editor) return;
+
+    const model = editor.getModel();
+    if (!model) return;
+
+    const text = model.getValue();
+    const lines = text.split('\n');
+    const newDecorations = [];
+    const MARKER_REGEX = /\[PROVE\s+IT:\s*(Easy|Medium|Hard)/i;
+
+    lines.forEach((line, idx) => {
+      const match = line.match(MARKER_REGEX);
+      if (match) {
+        const difficulty = match[1];
+        const lineNum = idx + 1;
+        newDecorations.push({
+          range: new monaco.Range(lineNum, 1, lineNum, 1),
+          options: {
+            isWholeLine: true,
+            className: 'prove-it-decoration',
+            glyphMarginClassName: `prove-it-glyph difficulty-${difficulty.toLowerCase()}`,
+            glyphMarginHoverMessage: {
+              value: `**[PROVE IT: ${difficulty}]** — Click "Prove All" or right-click to prove this`,
+            },
+          },
+        });
+      }
+    });
+
+    decorationsRef.current = editor.deltaDecorations(
+      decorationsRef.current,
+      newDecorations
+    );
+  }, [content, proofTasks]);
+
+  if (error) {
+    return (
+      <div style={{
+        padding: 24, color: 'var(--red)', fontFamily: 'var(--font-mono)',
+        fontSize: 13, background: 'var(--bg-primary)', height: '100%',
+      }}>
+        <div style={{ fontWeight: 700, marginBottom: 8 }}>Editor failed to load</div>
+        <div>{error}</div>
+        <div style={{ marginTop: 12, color: 'var(--text-muted)', fontSize: 11 }}>
+          Try running: npm install monaco-editor vite-plugin-monaco-editor
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ width: '100%', height: '100%' }}
+    />
+  );
+}

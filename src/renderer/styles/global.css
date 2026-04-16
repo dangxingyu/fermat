@@ -1,0 +1,809 @@
+/* ─── Fermat — Global Styles ───────────────────────────────────────────────
+   Design direction: "warm-dark manuscript". The app is a theorem-proving
+   workbench, so the whole interface leans into mathematical-typography cues
+   — Fraunces italics for display, typeset status marks (∎ ⋯ ⊙), warm ink
+   palette instead of the usual cold-blue IDE chrome.
+
+   Palette intentionally avoids Catppuccin / generic AI-IDE defaults. Accents
+   are sparse (whisky gold + verdigris) so meaningful moments stand out.
+--------------------------------------------------------------------------- */
+
+:root {
+  /* ── Ink & paper ─────────────────────────────────────────────────────── */
+  --bg-ink:        #17130f;   /* deepest — window chrome, behind everything */
+  --bg-primary:    #1c1713;   /* main canvas */
+  --bg-secondary:  #221c17;   /* panels, sidebar */
+  --bg-surface:    #2a231d;   /* cards, inputs */
+  --bg-hover:      #352c24;   /* button:hover, row:hover */
+  --bg-active:     #40342a;   /* pressed state */
+
+  /* ── Text ────────────────────────────────────────────────────────────── */
+  --text-primary:   #f1e6d6;  /* bone white */
+  --text-secondary: #b9ac98;  /* parchment */
+  --text-muted:     #7a6f5f;  /* faded ink */
+  --text-faint:     #554a3e;  /* hairlines, dividers on dark */
+
+  /* ── Accents (sparing use) ───────────────────────────────────────────── */
+  --accent:       #d4a574;    /* whisky gold — primary action */
+  --accent-soft:  #8a6d4a;    /* muted gold for borders */
+  --accent-hover: #e8b787;
+
+  --verdigris:    #7ea08e;    /* cool counterpoint — success / proved */
+  --verdigris-soft:#4f6659;
+  --vermillion:   #c46a4a;    /* failure / destructive */
+  --vermillion-soft:#7a4432;
+  --ochre:        #c89858;    /* pending / in-progress */
+  --plum:         #8a6d84;    /* definitions */
+  --slate:        #6f7a8a;    /* remarks / meta */
+
+  /* ── Structure ───────────────────────────────────────────────────────── */
+  --border:       #3a2f26;
+  --border-soft:  #2a231d;
+  --border-strong:#5a4a3c;
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-display: 'Fraunces', 'Iowan Old Style', 'Palatino', 'Georgia', serif;
+  --font-sans:    'Hanken Grotesk', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+
+  /* ── Shadows — warm, not cool ────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(10, 6, 3, 0.35);
+  --shadow-md: 0 4px 14px rgba(10, 6, 3, 0.5);
+  --shadow-lg: 0 12px 40px rgba(10, 6, 3, 0.65);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-feature-settings: 'ss01', 'cv11'; /* Hanken — tighter punctuation, single-story a */
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  letter-spacing: 0.005em;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Subtle paper grain across the whole app ────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.035;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 0.9  0 0 0 0 0.7  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+#root { position: relative; z-index: 2; }
+
+/* ─── Layout ─────────────────────────────────────────────────────────────── */
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg-primary);
+}
+
+/* ─── Toolbar (window chrome) ────────────────────────────────────────────── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 14px 8px 84px;          /* leave room for macOS traffic lights */
+  background: linear-gradient(180deg, #211b16 0%, #1a1510 100%);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  -webkit-app-region: drag;
+  position: relative;
+}
+
+.toolbar::after {
+  /* hairline highlight under the border — embossed edge */
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -1px; height: 1px;
+  background: rgba(255, 220, 180, 0.03);
+  pointer-events: none;
+}
+
+.toolbar button {
+  -webkit-app-region: no-drag;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  padding: 4px 11px;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  transition: background 0.18s var(--ease-out), color 0.18s var(--ease-out),
+              border-color 0.18s var(--ease-out);
+}
+
+.toolbar button:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.toolbar button:active {
+  background: var(--bg-active);
+}
+
+/* ─── Brand mark ─────────────────────────────────────────────────────────── */
+.toolbar .brand {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 0 14px 0 2px;
+  margin-right: 10px;
+  user-select: none;
+  position: relative;
+}
+
+.toolbar .brand::after {
+  content: '';
+  position: absolute;
+  right: 0; top: 20%; bottom: 20%;
+  width: 1px;
+  background: var(--border);
+}
+
+.toolbar .brand svg {
+  display: block;
+  align-self: center;
+  transition: transform 0.4s var(--ease-out);
+}
+
+.toolbar .brand:hover svg {
+  transform: rotate(-4deg);
+}
+
+.toolbar .brand-name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 500;
+  font-style: italic;
+  font-variation-settings: 'opsz' 144, 'SOFT' 30;
+  letter-spacing: -0.015em;
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+/* Current-file chip */
+.toolbar .file-name {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  margin-left: 10px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border-soft);
+}
+
+.toolbar .spacer { flex: 1; }
+
+/* Copilot status pill */
+.toolbar .copilot-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 9;
+  color: var(--text-muted);
+  padding-left: 10px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+/* ─── Main content area ──────────────────────────────────────────────────── */
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+/* ─── Sidebar (Theory Outline) ──────────────────────────────────────────── */
+.sidebar {
+  flex-shrink: 0;
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Vertical ruling — a fine verdigris line, like a manuscript margin */
+.sidebar::before {
+  content: '';
+  position: absolute;
+  left: 14px; top: 48px; bottom: 0;
+  width: 1px;
+  background: linear-gradient(180deg,
+    transparent 0%,
+    var(--verdigris-soft) 8%,
+    var(--verdigris-soft) 92%,
+    transparent 100%);
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.sidebar-header {
+  padding: 14px 16px 10px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 14, 'SOFT' 50;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.sidebar-header > span:last-child {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+  letter-spacing: 0.05em;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 0 16px;
+}
+
+/* ─── Outline nodes ──────────────────────────────────────────────────────── */
+.outline-node {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 16px 6px 26px;  /* left padding makes space for the margin rule */
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+  position: relative;
+}
+
+.outline-node:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.outline-node.section {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 14;
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: 14px;
+  padding-top: 8px;
+  color: var(--text-primary);
+  border-top: 1px solid var(--border-soft);
+}
+
+/* Type badges — small-caps typographic labels, not colored pills */
+.outline-node .type-badge {
+  font-family: var(--font-display);
+  font-variation-settings: 'opsz' 9;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 1px 0;
+  flex-shrink: 0;
+  min-width: 34px;
+  text-align: left;
+  border-bottom: 1px solid currentColor;
+  line-height: 1.2;
+  opacity: 0.85;
+}
+
+.type-badge.theorem     { color: var(--accent); }
+.type-badge.lemma       { color: var(--plum); }
+.type-badge.proposition { color: var(--ochre); }
+.type-badge.corollary   { color: var(--accent-soft); }
+.type-badge.definition  { color: var(--verdigris); }
+.type-badge.remark      { color: var(--slate); }
+.type-badge.example     { color: var(--slate); }
+.type-badge.conjecture  { color: var(--vermillion); }
+.type-badge.claim       { color: var(--ochre); }
+.type-badge.axiom       { color: var(--accent); }
+.type-badge.assumption  { color: var(--slate); }
+
+/* ─── Typeset status marks (replace the generic dots) ───────────────────── */
+.status-mark {
+  width: 14px; height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: center;
+}
+
+.status-mark[data-status="proved"]   { color: var(--verdigris);   }   /* ∎ */
+.status-mark[data-status="pending"]  { color: var(--ochre);       }   /* ⊙ */
+.status-mark[data-status="proving"]  { color: var(--accent);
+  animation: mark-pulse 1.6s ease-in-out infinite; }                   /* ⋯ */
+.status-mark[data-status="failed"]   { color: var(--vermillion);  }   /* ⊗ */
+.status-mark[data-status="unproved"] { color: var(--text-faint); opacity: 0.7; } /* · */
+
+@keyframes mark-pulse {
+  0%, 100% { opacity: 0.4; transform: translateY(0); }
+  50%      { opacity: 1;   transform: translateY(-1px); }
+}
+
+/* Difficulty pill — small-caps instead of bright block */
+.outline-node .difficulty {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 9;
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 0 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  border: 1px solid currentColor;
+  line-height: 1.5;
+  opacity: 0.8;
+}
+
+.outline-node .difficulty.Easy   { color: var(--verdigris); }
+.outline-node .difficulty.Medium { color: var(--ochre);     }
+.outline-node .difficulty.Hard   { color: var(--vermillion);}
+
+/* ─── Editor + PDF split ─────────────────────────────────────────────────── */
+.editor-area {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.editor-panel {
+  position: relative;
+  overflow: hidden;
+  min-width: 100px;
+  background: var(--bg-primary);
+}
+
+.pdf-panel {
+  flex: 1;
+  background: #16110d;
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.pdf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 9;
+  color: var(--text-muted);
+}
+
+.pdf-viewer {
+  flex: 1;
+  overflow: auto;
+  padding: 20px;
+  text-align: center;
+}
+
+.pdf-pages-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding-bottom: 40px;
+}
+
+.pdf-page-container {
+  position: relative;
+  display: block;
+  text-align: left;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.4), 0 20px 50px rgba(0,0,0,0.45);
+  background: #fff;
+  /* Warm paper tint on hover — hints at the "manuscript" theme */
+  transition: box-shadow 0.3s var(--ease-out);
+}
+
+.pdf-page-container canvas { display: block; }
+
+.pdf-page-container .textLayer {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
+.pdf-page-container .textLayer ::selection {
+  background: rgba(212, 165, 116, 0.35);     /* gold instead of blue */
+}
+
+/* SyncTeX forward-search highlight — whisky amber */
+.synctex-highlight {
+  background: rgba(212, 165, 116, 0.25);
+  border-left: 3px solid var(--accent);
+  pointer-events: none;
+  animation: synctex-fade 2.5s ease-out forwards;
+  z-index: 10;
+}
+
+@keyframes synctex-fade {
+  0%   { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* ─── Proof Review Panel ─────────────────────────────────────────────────── */
+.proof-review-panel {
+  width: 440px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.proof-review-header {
+  padding: 14px 16px 10px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 14;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.proof-review-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+/* Each proof card looks like an index card slipped into a manuscript. */
+.proof-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--accent-soft);
+  border-radius: 3px;
+  padding: 14px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow-sm);
+  animation: card-enter 0.35s var(--ease-out);
+}
+
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.proof-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 14;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.proof-card .difficulty {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 9;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  text-transform: lowercase;
+  opacity: 0.85;
+}
+
+.difficulty.Easy   { color: var(--verdigris);  }
+.difficulty.Medium { color: var(--ochre);      }
+.difficulty.Hard   { color: var(--vermillion); }
+
+.proof-card pre {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.6;
+  background: var(--bg-ink);
+  padding: 12px;
+  border-radius: 3px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border-soft);
+}
+
+.proof-card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.proof-card-actions button {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 9;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  letter-spacing: 0.01em;
+  transition: all 0.18s var(--ease-out);
+}
+
+.proof-card-actions button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-accept {
+  color: var(--verdigris) !important;
+  border-color: var(--verdigris-soft) !important;
+}
+.btn-accept:hover {
+  background: var(--verdigris-soft);
+  color: var(--text-primary) !important;
+  border-color: var(--verdigris) !important;
+}
+
+.btn-reject {
+  color: var(--vermillion) !important;
+  border-color: var(--vermillion-soft) !important;
+}
+.btn-reject:hover {
+  background: var(--vermillion-soft);
+  color: var(--text-primary) !important;
+  border-color: var(--vermillion) !important;
+}
+
+.btn-edit {
+  color: var(--accent) !important;
+  border-color: var(--accent-soft) !important;
+}
+.btn-edit:hover {
+  background: var(--accent-soft);
+  color: var(--bg-ink) !important;
+  border-color: var(--accent) !important;
+}
+
+/* ─── Settings modal ─────────────────────────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 6, 3, 0.72);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  animation: overlay-in 0.25s ease-out;
+}
+
+@keyframes overlay-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.modal {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 28px 30px;
+  width: 520px;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+  animation: modal-in 0.35s var(--ease-out);
+  position: relative;
+}
+
+.modal::before {
+  /* thin gold rule across the top — editorial flourish */
+  content: '';
+  position: absolute;
+  top: 0; left: 30px; right: 30px; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  opacity: 0.6;
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+
+.modal h2 {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-variation-settings: 'opsz' 144, 'SOFT' 40;
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: -0.015em;
+  margin-bottom: 4px;
+  color: var(--text-primary);
+}
+
+.modal label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  margin-top: 18px;
+  font-weight: 500;
+}
+
+.modal input,
+.modal select {
+  width: 100%;
+  padding: 9px 11px;
+  background: var(--bg-ink);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  transition: border-color 0.18s, background 0.18s;
+}
+
+.modal input:focus,
+.modal select:focus {
+  outline: none;
+  border-color: var(--accent-soft);
+  background: var(--bg-primary);
+}
+
+.modal .modal-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 26px;
+  justify-content: flex-end;
+}
+
+.modal .modal-actions button {
+  padding: 8px 18px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  font: 500 12px/1 var(--font-sans);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: all 0.18s var(--ease-out);
+}
+
+.modal .modal-actions button:last-child {
+  background: var(--accent);
+  color: var(--bg-ink);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.modal .modal-actions button:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.modal .modal-actions button:last-child:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+/* ─── Resizer ────────────────────────────────────────────────────────────── */
+.resizer {
+  width: 1px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.18s, width 0.18s;
+  position: relative;
+}
+
+.resizer::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -6px;
+  width: 13px;
+}
+
+.resizer:hover,
+.resizer:active {
+  background: var(--accent);
+  width: 2px;
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-soft);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* ─── Monaco decorations ─────────────────────────────────────────────────── */
+.prove-it-decoration {
+  background: linear-gradient(90deg,
+    rgba(212, 165, 116, 0.14) 0%,
+    rgba(212, 165, 116, 0.02) 100%);
+  border-left: 2px solid var(--accent);
+}
+
+.prove-it-glyph {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  margin-left: 4px;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(212, 165, 116, 0.18);
+}
+
+/* ─── Selection ──────────────────────────────────────────────────────────── */
+::selection {
+  background: rgba(212, 165, 116, 0.28);
+  color: var(--text-primary);
+}

@@ -1,0 +1,107 @@
+```
+<strategy>
+Primary approach: Two-part proof — existence by strong induction, uniqueness by
+  Euclid's Lemma (itself derived from the Division Lemma via Bézout's identity)
+Why this approach: The claim splits naturally into existence and uniqueness.
+  Existence is a clean strong induction: every composite has a smaller factor,
+  so the induction hypothesis gives prime factorizations of the parts. Uniqueness
+  is where the real content lives — you need to show that if a prime p divides a
+  product ab, then p | a or p | b. This is the irreducibility-implies-primality
+  step, and it flows from the Division Lemma through Bézout's identity. This
+  mirrors *why* the theorem is true: the Division Lemma is what gives ℤ a
+  Euclidean structure, and that structure is what forces unique factorization.
+Alternatives considered: One could appeal to the well-ordering principle directly
+  for existence (take the least divisor > 1, which must be prime, repeat) — this
+  is essentially equivalent to strong induction but slightly less transparent for
+  the uniqueness half. Alternatively, uniqueness can be proved by assuming two
+  factorizations and canceling common primes, but this still requires Euclid's
+  Lemma underneath. Neither alternative avoids the Bézout gap identified below.
+</strategy>
+
+<prerequisites>
+Status: missing_some
+
+Available:
+- [\ref{def:prime}] Prime Number — used throughout to identify and characterize
+    prime factors
+- [\ref{lem:division}] Division Lemma — UNPROVED (see Missing below), but once
+    proved it underlies the Bézout argument for Euclid's Lemma
+
+Missing:
+- **Bézout's Identity**: For integers a, b with gcd(a,b) = d, there exist
+    integers x, y such that ax + by = d. This is the key consequence of
+    \ref{lem:division} needed for uniqueness. It is not in the document.
+    Recommended action: prove it as a new lemma (lem:bezout) immediately
+    after lem:division, or prove it inline inside an Euclid's Lemma block.
+
+- **Euclid's Lemma**: If p is prime and p | ab, then p | a or p | b.
+    This is the engine of uniqueness. It follows from Bézout but is
+    substantial enough to deserve its own lemma (lem:euclid). Without it,
+    uniqueness cannot be proved from the current document.
+    Recommended action: new lemma (lem:euclid) in the Foundations section,
+    depending on lem:division and lem:bezout.
+
+- **Division Lemma** [\ref{lem:division}]: Currently UNPROVED. The FTA proof
+    depends on it indirectly (through Bézout → Euclid's Lemma). The Division
+    Lemma should be proved before attempting thm:fta.
+    Recommended action: prove lem:division first (it is tagged [PROVE IT: Medium]).
+</prerequisites>
+
+<key_steps>
+PART 1 — EXISTENCE
+
+1. Base case: n = 2 is prime, so it is already a product of one prime (itself).
+   Technique: direct verification using def:prime
+   Depends on: def:prime
+
+2. Inductive step (strong induction): Assume every integer 2 ≤ k < n has a
+   prime factorization. If n is prime, done. If n is composite, then n = ab
+   with 1 < a, b < n; by the induction hypothesis both a and b have prime
+   factorizations, and concatenating them gives one for n.
+   Technique: strong induction; definition of composite (negation of def:prime)
+   Depends on: def:prime
+
+PART 2 — UNIQUENESS
+
+3. Establish Euclid's Lemma: if p is prime and p | ab, then p | a or p | b.
+   Sub-proof: since p is prime, gcd(p, a) is 1 or p. If p | a, done. Otherwise
+   gcd(p, a) = 1, so by Bézout there exist x, y with px + ay = 1; multiply
+   both sides by b to get pxb + aby = b; since p | p and p | ab, p | b.
+   Technique: Bézout's identity (needs lem:bezout), divisibility arithmetic
+   Depends on: lem:division → lem:bezout (both missing)
+
+4. Extend Euclid's Lemma to products: if p | p₁p₂⋯pₖ, then p = pᵢ for some i
+   (since each pᵢ is prime, p | pᵢ forces p = pᵢ).
+   Technique: induction on k using step 3
+   Depends on: step 3, def:prime
+
+5. Uniqueness argument: suppose n = p₁⋯pₛ = q₁⋯qₜ are two prime factorizations.
+   p₁ divides the right-hand side, so by step 4, p₁ = qⱼ for some j. Cancel
+   and repeat; the two lists must be identical up to reordering, so s = t.
+   Technique: cancellation induction on the length of the factorization
+   Depends on: step 4
+</key_steps>
+
+<complexity>
+Estimated length: long (30+ lines)
+Sub-lemmas needed: 2
+  1. lem:bezout — Bézout's Identity (Medium difficulty; direct consequence of
+     lem:division via the extended Euclidean algorithm)
+  2. lem:euclid — Euclid's Lemma, p prime, p | ab ⟹ p | a or p | b (Medium;
+     uses lem:bezout)
+Confidence: high — the proof strategy is classical and fully determined once the
+  two missing lemmas are in place; no genuinely novel steps are required
+Potential issues:
+  - The proof of lem:bezout (Bézout's Identity) is itself non-trivial and
+    requires either an explicit extended-Euclidean-algorithm argument or a
+    least-element / well-ordering argument for the set {ax + by | x,y ∈ ℤ}.
+    This is the most technically delicate piece.
+  - lem:division is currently unproved; it should be completed first since
+    both lem:bezout and thm:fta depend on it transitively.
+  - The uniqueness half is substantially harder than existence; rushing it
+    without lem:euclid in place will produce a gap.
+
+Recommended sequencing before invoking fermat-prove on thm:fta:
+  lem:division  →  lem:bezout (new)  →  lem:euclid (new)  →  thm:fta
+</complexity>
+```

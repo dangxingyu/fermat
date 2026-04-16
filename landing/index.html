@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fermat — AI-powered LaTeX theorem prover</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #1e1e2e;
+      --bg2:      #181825;
+      --bg3:      #313244;
+      --text:     #cdd6f4;
+      --muted:    #6c7086;
+      --blue:     #89b4fa;
+      --lavender: #b4befe;
+      --mauve:    #cba6f7;
+      --green:    #a6e3a1;
+      --red:      #f38ba8;
+      --radius:   10px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    /* ── Nav ─────────────────────────────────────────────────────── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 18px 40px;
+      border-bottom: 1px solid var(--bg3);
+      position: sticky;
+      top: 0;
+      background: rgba(30, 30, 46, 0.92);
+      backdrop-filter: blur(12px);
+      z-index: 100;
+    }
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 18px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .logo-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, #89b4fa, #b4befe, #cba6f7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 16px;
+      color: #181825;
+      letter-spacing: -1px;
+      flex-shrink: 0;
+    }
+    .nav-links { display: flex; gap: 28px; }
+    .nav-links a {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      transition: color .15s;
+    }
+    .nav-links a:hover { color: var(--text); }
+
+    /* ── Hero ────────────────────────────────────────────────────── */
+    .hero {
+      max-width: 780px;
+      margin: 96px auto 64px;
+      padding: 0 24px;
+      text-align: center;
+    }
+    .pill {
+      display: inline-block;
+      background: var(--bg3);
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 14px;
+      border-radius: 999px;
+      margin-bottom: 24px;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    h1 {
+      font-size: clamp(36px, 6vw, 64px);
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -1.5px;
+      margin-bottom: 20px;
+      background: linear-gradient(135deg, var(--blue) 0%, var(--lavender) 50%, var(--mauve) 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .tagline {
+      font-size: 18px;
+      color: var(--muted);
+      max-width: 560px;
+      margin: 0 auto 36px;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────── */
+    .btn-row {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      border-radius: var(--radius);
+      font-size: 15px;
+      font-weight: 600;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: opacity .15s, transform .1s;
+    }
+    .btn:active { transform: scale(.97); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--blue), var(--mauve));
+      color: #1e1e2e;
+    }
+    .btn-primary:hover { opacity: .9; }
+    .btn-secondary {
+      background: var(--bg3);
+      color: var(--text);
+      border: 1px solid #45475a;
+    }
+    .btn-secondary:hover { border-color: var(--blue); }
+
+    .platform-note {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    /* ── Screenshot placeholder ──────────────────────────────────── */
+    .screenshot-wrap {
+      max-width: 900px;
+      margin: 0 auto 80px;
+      padding: 0 24px;
+    }
+    .screenshot-frame {
+      background: var(--bg2);
+      border: 1px solid var(--bg3);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 32px 80px rgba(0,0,0,.5);
+    }
+    .screenshot-bar {
+      background: var(--bg3);
+      padding: 10px 16px;
+      display: flex;
+      gap: 7px;
+      align-items: center;
+    }
+    .dot { width: 12px; height: 12px; border-radius: 50%; }
+    .dot-red    { background: #f38ba8; }
+    .dot-yellow { background: #f9e2af; }
+    .dot-green  { background: #a6e3a1; }
+    .screenshot-body {
+      height: 420px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .screenshot-body img {
+      max-width: 100%;
+      max-height: 100%;
+      display: block;
+    }
+
+    /* ── Features ────────────────────────────────────────────────── */
+    section { max-width: 900px; margin: 0 auto 80px; padding: 0 24px; }
+    .section-label {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 12px;
+    }
+    h2 {
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: -.5px;
+      margin-bottom: 40px;
+    }
+    .features {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 20px;
+    }
+    .feature-card {
+      background: var(--bg2);
+      border: 1px solid var(--bg3);
+      border-radius: var(--radius);
+      padding: 24px;
+    }
+    .feature-icon {
+      font-size: 24px;
+      margin-bottom: 14px;
+    }
+    .feature-card h3 {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .feature-card p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    /* ── Code block ──────────────────────────────────────────────── */
+    .code-demo {
+      background: var(--bg2);
+      border: 1px solid var(--bg3);
+      border-radius: var(--radius);
+      padding: 24px 28px;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+      font-size: 13px;
+      line-height: 1.8;
+      overflow-x: auto;
+    }
+    .code-demo .kw  { color: var(--mauve); }
+    .code-demo .cmd { color: var(--blue); }
+    .code-demo .env { color: var(--lavender); }
+    .code-demo .cmt { color: #585b70; font-style: italic; }
+    .code-demo .marker { color: var(--green); }
+
+    /* ── Waitlist ─────────────────────────────────────────────────── */
+    .waitlist-box {
+      background: var(--bg2);
+      border: 1px solid var(--bg3);
+      border-radius: 14px;
+      padding: 48px 40px;
+      text-align: center;
+    }
+    .waitlist-box h2 { margin-bottom: 10px; }
+    .waitlist-box p  { color: var(--muted); margin-bottom: 28px; font-size: 15px; }
+    .waitlist-form {
+      display: flex;
+      gap: 10px;
+      max-width: 420px;
+      margin: 0 auto;
+    }
+    .waitlist-form input {
+      flex: 1;
+      background: var(--bg3);
+      border: 1px solid #45475a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+    .waitlist-form input:focus { border-color: var(--blue); }
+    .waitlist-form input::placeholder { color: var(--muted); }
+    .waitlist-form button {
+      background: linear-gradient(135deg, var(--blue), var(--mauve));
+      color: #1e1e2e;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .waitlist-form button:hover { opacity: .9; }
+    .form-note { font-size: 12px; color: var(--muted); margin-top: 10px; }
+
+    /* ── Footer ──────────────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--bg3);
+      padding: 28px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    footer a { color: var(--muted); text-decoration: none; }
+    footer a:hover { color: var(--text); }
+    .footer-links { display: flex; gap: 20px; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Navigation ────────────────────────────────────────────── -->
+  <nav>
+    <a class="nav-logo" href="#">
+      <div class="logo-mark">F∴</div>
+      Fermat
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#how-it-works">How it works</a>
+      <a href="https://github.com/TODO(xingyu)/fermat">GitHub</a><!-- TODO(xingyu): fill repo URL -->
+      <a href="#waitlist">Early access</a>
+    </div>
+  </nav>
+
+  <!-- ── Hero ──────────────────────────────────────────────────── -->
+  <div class="hero">
+    <div class="pill">AI theorem prover</div>
+    <h1>The proof is no longer too large for the margin.</h1>
+    <p class="tagline">
+      Write your theorems in LaTeX. Mark what needs proving.
+      Let Claude sketch, prove, and verify — right inside your document.
+    </p>
+    <div class="btn-row">
+      <!-- TODO(xingyu): replace hrefs with actual GitHub release URLs -->
+      <a class="btn btn-primary" href="https://github.com/TODO(xingyu)/fermat/releases">
+        ⬇ Download for Mac
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/TODO(xingyu)/fermat/releases">
+        Windows / Linux
+      </a>
+    </div>
+    <p class="platform-note">macOS (Universal) · Windows (x64) · Linux (AppImage) — MIT License</p>
+  </div>
+
+  <!-- ── Screenshot ────────────────────────────────────────────── -->
+  <div class="screenshot-wrap">
+    <div class="screenshot-frame">
+      <div class="screenshot-bar">
+        <div class="dot dot-red"></div>
+        <div class="dot dot-yellow"></div>
+        <div class="dot dot-green"></div>
+      </div>
+      <div class="screenshot-body">
+        <!-- TODO(xingyu): replace with actual screenshot -->
+        <img src="../docs/screenshot.png" alt="Fermat editor screenshot"
+             onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
+        <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
+          <span style="font-size:48px;">🖼</span>
+          <span>Screenshot coming soon</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Features ──────────────────────────────────────────────── -->
+  <section id="features">
+    <div class="section-label">Why Fermat</div>
+    <h2>Everything you need to prove theorems faster.</h2>
+    <div class="features">
+      <div class="feature-card">
+        <div class="feature-icon">✏️</div>
+        <h3>Monaco LaTeX editor</h3>
+        <p>Full syntax highlighting, auto-completion, and auto-closing environments — the VS Code editing experience inside your theorem prover.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🤖</div>
+        <h3>3-phase proof pipeline</h3>
+        <p>Sketch → Prove → Verify. Claude plans the approach, writes a rigorous <code>\begin{proof}</code>, then acts as judge — retrying once if it fails.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔍</div>
+        <h3>Context-aware proving</h3>
+        <p>The engine reads your entire document — definitions, prior lemmas, the dependency graph — so proofs reference your actual theorems, not generic placeholders.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📋</div>
+        <h3>Review before inserting</h3>
+        <p>Easy proofs auto-inline. Medium and Hard proofs land in the Review Panel so you can read, edit, accept, or reject before they touch your document.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">🔗</div>
+        <h3>SyncTeX navigation</h3>
+        <p>Click in the PDF → jump to the source line. Press the sync button → PDF scrolls to your cursor. Forward and inverse search, out of the box.</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon">📦</div>
+        <h3>Ships as a desktop app</h3>
+        <p>Electron-packaged for macOS (Universal), Windows, and Linux. No web account needed — your documents and API key stay local.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── How it works ───────────────────────────────────────────── -->
+  <section id="how-it-works">
+    <div class="section-label">How it works</div>
+    <h2>One comment triggers the whole pipeline.</h2>
+    <div class="code-demo">
+<span class="kw">\begin</span>{<span class="env">theorem</span>}[Infinitude of Primes]
+<span class="kw">\label</span>{thm:inf-primes}
+There are infinitely many prime numbers.
+<span class="kw">\end</span>{<span class="env">theorem</span>}
+<span class="marker">% [PROVE IT: Easy]</span>     <span class="cmt">← Fermat sees this, queues a proof task</span>
+
+<span class="kw">\begin</span>{<span class="env">theorem</span>}[Fundamental Theorem of Arithmetic]
+<span class="kw">\label</span>{thm:fta}
+Every integer <span class="cmd">$n > 1$</span> has a unique prime factorisation.
+<span class="kw">\end</span>{<span class="env">theorem</span>}
+<span class="marker">% [PROVE IT: Hard]</span>       <span class="cmt">← sketch → prove → verify pipeline runs</span>
+<span class="cmt">% SKETCH: Two parts — existence by induction, uniqueness via Euclid's lemma.</span>
+    </div>
+    <br/>
+    <p style="color:var(--muted); font-size:14px; max-width:640px;">
+      Click <strong>Submit All</strong> in the toolbar. Easy proofs appear instantly inline.
+      Hard proofs land in the <strong>Review Panel</strong> where you edit and accept them before
+      they're inserted — keeping you in full control of your document.
+    </p>
+  </section>
+
+  <!-- ── Waitlist ───────────────────────────────────────────────── -->
+  <section id="waitlist">
+    <div class="waitlist-box">
+      <div class="section-label">Early access</div>
+      <h2>Join the waitlist.</h2>
+      <p>Get notified when the first public release drops and help shape the roadmap.</p>
+      <!-- TODO(xingyu): replace action with Formspree/ConvertKit endpoint, e.g.:
+           action="https://formspree.io/f/YOUR_FORM_ID" method="POST"
+      -->
+      <form class="waitlist-form"
+            action="mailto:TODO@example.com"
+            method="get"
+            enctype="text/plain">
+        <input type="email" name="email" placeholder="you@university.edu" required />
+        <button type="submit">Notify me</button>
+      </form>
+      <p class="form-note">No spam. Unsubscribe any time.</p>
+    </div>
+  </section>
+
+  <!-- ── Footer ────────────────────────────────────────────────── -->
+  <footer>
+    <span>© 2026 Fermat — MIT License</span>
+    <div class="footer-links">
+      <a href="https://github.com/TODO(xingyu)/fermat">GitHub</a><!-- TODO(xingyu): fill -->
+      <a href="https://github.com/TODO(xingyu)/fermat/releases">Releases</a><!-- TODO(xingyu): fill -->
+      <a href="https://github.com/TODO(xingyu)/fermat/issues">Issues</a><!-- TODO(xingyu): fill -->
+    </div>
+  </footer>
+
+</body>
+</html>
