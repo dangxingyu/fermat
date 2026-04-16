@@ -703,7 +703,7 @@ export default function App() {
             <>
               <div className="resizer" onMouseDown={handleResizerMouseDown} />
               {/* ── Right panel: PDF / Lean tab switcher ─────────────── */}
-              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
                 {/* Tab bar — only shown when Lean mode is active */}
                 {leanState && (
                   <div style={{

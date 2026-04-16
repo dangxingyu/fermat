@@ -418,6 +418,7 @@ body::before {
 
 .pdf-viewer {
   flex: 1;
+  min-height: 0; /* let overflow:auto actually scroll inside a column flex parent */
   overflow: auto;
   padding: 20px;
   text-align: center;
