@@ -3,12 +3,15 @@ import Logo from './Logo';
 
 export default function Toolbar({
   filePath,
+  isDirty,
   folderPath,
   folderFiles,
+  onNew,
   onOpen,
   onOpenFolder,
   onSelectFile,
   onSave,
+  onSaveAs,
   onCompile,
   onToggleOutline,
   onTogglePdf,
@@ -18,7 +21,9 @@ export default function Toolbar({
   onSubmitAll,
   copilotStatus,
 }) {
-  const fileName = filePath ? filePath.split('/').pop() : 'Untitled.tex';
+  const baseName = filePath ? filePath.split('/').pop() : 'Untitled';
+  // Show dirty indicator in the file name badge
+  const fileName = isDirty ? `• ${baseName}` : baseName;
   const folderName = folderPath ? folderPath.split('/').filter(Boolean).pop() : null;
   const [fileMenuOpen, setFileMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -43,11 +48,13 @@ export default function Toolbar({
         <Logo size={22} />
         <span className="brand-name">Fermat</span>
       </div>
+      <button onClick={onNew} title="New file (Cmd+N)">New</button>
       <button onClick={onOpen} title="Open file (Cmd+O)">Open</button>
       <button onClick={onOpenFolder} title="Open folder — lets LaTeX find \\input{...} and graphics from the project directory">
         Open Folder
       </button>
       <button onClick={onSave} title="Save file (Cmd+S)">Save</button>
+      <button onClick={onSaveAs} title="Save As… (Cmd+Shift+S)">Save As</button>
       <button onClick={onCompile} title="Compile LaTeX (Cmd+B)">Compile</button>
 
       {hasFolderFiles ? (

@@ -7,7 +7,23 @@ contextBridge.exposeInMainWorld('api', {
     openFolder: () => ipcRenderer.invoke('file:open-folder'),
     listDir: (folderPath) => ipcRenderer.invoke('file:list-dir', folderPath),
     save: (data) => ipcRenderer.invoke('file:save', data),
+    saveAs: (data) => ipcRenderer.invoke('file:save-as', data),
     read: (filePath) => ipcRenderer.invoke('file:read', filePath),
+  },
+
+  // Window helpers — dirty state, title, menu-event listeners
+  window: {
+    // Tell main process whether the document has unsaved changes.
+    setDirty: (dirty) => ipcRenderer.send('window:set-dirty', dirty),
+    // Skip the dirty check and destroy the window (used after "save and close").
+    forceClose: () => ipcRenderer.send('window:force-close'),
+    // Subscribe to menu-triggered file commands.
+    onMenuNew:         (cb) => { const h = () => cb(); ipcRenderer.on('menu:new',           h); return () => ipcRenderer.removeListener('menu:new',           h); },
+    onMenuOpen:        (cb) => { const h = () => cb(); ipcRenderer.on('menu:open',          h); return () => ipcRenderer.removeListener('menu:open',          h); },
+    onMenuOpenFolder:  (cb) => { const h = () => cb(); ipcRenderer.on('menu:open-folder',   h); return () => ipcRenderer.removeListener('menu:open-folder',   h); },
+    onMenuSave:        (cb) => { const h = () => cb(); ipcRenderer.on('menu:save',          h); return () => ipcRenderer.removeListener('menu:save',          h); },
+    onMenuSaveAs:      (cb) => { const h = () => cb(); ipcRenderer.on('menu:save-as',       h); return () => ipcRenderer.removeListener('menu:save-as',       h); },
+    onMenuSaveAndClose:(cb) => { const h = () => cb(); ipcRenderer.on('menu:save-and-close',h); return () => ipcRenderer.removeListener('menu:save-and-close',h); },
   },
 
   // TeX compilation

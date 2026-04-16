@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { FermatEngine } = require('./copilot-engine');
@@ -24,6 +24,9 @@ let mainWindow;
 let copilotEngine;
 let texCompiler;
 let synctexBridge;
+
+// Renderer reports its dirty state here so the close handler can decide.
+let isDirtyInRenderer = false;
 
 // ─── Log forwarding: tee main-process console output to renderer ───
 const logBuffer = []; // keep last N entries so late subscribers can catch up
@@ -56,12 +59,34 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
-    title: 'Fermat',
+    // title is managed dynamically by the renderer via document.title
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // ─── Intercept close to check for unsaved changes ───────────────────
+  mainWindow.on('close', async (e) => {
+    if (!isDirtyInRenderer) return; // no unsaved changes, close normally
+    e.preventDefault();
+    const { response } = await dialog.showMessageBox(mainWindow, {
+      type: 'question',
+      buttons: ['Save', "Don't Save", 'Cancel'],
+      defaultId: 0,
+      cancelId: 2,
+      message: 'Save changes before closing?',
+      detail: 'Your changes will be lost if you close without saving.',
+    });
+    if (response === 0) {
+      // Tell renderer to save then close — renderer calls window:force-close when done.
+      mainWindow.webContents.send('menu:save-and-close');
+    } else if (response === 1) {
+      isDirtyInRenderer = false;
+      mainWindow.destroy();
+    }
+    // response === 2 (Cancel): do nothing, window stays open
   });
 
   if (isDev) {
@@ -109,6 +134,95 @@ function createWindow() {
     }
   }
 
+  // ─── Application menu (enables global keyboard shortcuts) ──────────
+  const menuTemplate = [
+    // macOS: standard app menu (About, Hide, Quit, etc.)
+    ...(process.platform === 'darwin' ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    }] : []),
+    {
+      label: 'File',
+      submenu: [
+        {
+          label: 'New',
+          accelerator: 'CmdOrCtrl+N',
+          click: () => mainWindow?.webContents.send('menu:new'),
+        },
+        {
+          label: 'Open File…',
+          accelerator: 'CmdOrCtrl+O',
+          click: () => mainWindow?.webContents.send('menu:open'),
+        },
+        {
+          label: 'Open Folder…',
+          click: () => mainWindow?.webContents.send('menu:open-folder'),
+        },
+        { type: 'separator' },
+        {
+          label: 'Save',
+          accelerator: 'CmdOrCtrl+S',
+          click: () => mainWindow?.webContents.send('menu:save'),
+        },
+        {
+          label: 'Save As…',
+          accelerator: 'CmdOrCtrl+Shift+S',
+          click: () => mainWindow?.webContents.send('menu:save-as'),
+        },
+        { type: 'separator' },
+        // On macOS the Quit item lives in the app menu above; on Windows/Linux add it here.
+        ...(process.platform !== 'darwin' ? [{ role: 'quit' }] : []),
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: 'Window',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        ...(process.platform === 'darwin'
+          ? [{ type: 'separator' }, { role: 'front' }]
+          : [{ role: 'close' }]),
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+
   // Forward copilot events to renderer
   copilotEngine.on('proof:started', (data) => {
     mainWindow.webContents.send('copilot:proof-started', data);
@@ -142,13 +256,30 @@ ipcMain.handle('file:open', async () => {
 ipcMain.handle('file:save', async (_event, { filePath, content }) => {
   if (!filePath) {
     const result = await dialog.showSaveDialog(mainWindow, {
-      filters: [{ name: 'LaTeX Files', extensions: ['tex'] }],
+      filters: [
+        { name: 'LaTeX Files', extensions: ['tex', 'sty', 'cls', 'bib'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
     });
     if (result.canceled) return null;
     filePath = result.filePath;
   }
   fs.writeFileSync(filePath, content, 'utf-8');
   return filePath;
+});
+
+// Save As: always shows the dialog regardless of whether a path is already set.
+ipcMain.handle('file:save-as', async (_event, { filePath, content }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: filePath || undefined, // pre-fill current name if available
+    filters: [
+      { name: 'LaTeX Files', extensions: ['tex', 'sty', 'cls', 'bib'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled) return null;
+  fs.writeFileSync(result.filePath, content, 'utf-8');
+  return result.filePath;
 });
 
 ipcMain.handle('file:read', async (_event, filePath) => {
@@ -255,6 +386,20 @@ ipcMain.handle('update:download', async () => {
 });
 ipcMain.handle('update:install', async () => {
   if (autoUpdater) autoUpdater.quitAndInstall();
+});
+
+// ─── Window / dirty-state helpers ─────────────────────────────────
+// Renderer reports dirty state whenever it changes so the close handler
+// can decide whether to prompt for unsaved changes.
+ipcMain.on('window:set-dirty', (_event, dirty) => {
+  isDirtyInRenderer = !!dirty;
+});
+
+// Renderer calls this after a successful "save and close" sequence to
+// bypass the dirty check and actually destroy the window.
+ipcMain.on('window:force-close', () => {
+  isDirtyInRenderer = false;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
 });
 
 // ─── Log buffer (for late subscribers) ────────────────────────────

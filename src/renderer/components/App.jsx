@@ -151,6 +151,7 @@ $\\sqrt{2}$ is irrational. This follows from Theorem~\\ref{thm:fta}.
 
 export default function App() {
   const [content, setContent] = useState(SAMPLE_TEX);
+  const [isDirty, setIsDirty] = useState(false);
   const [filePath, setFilePath] = useState(null);
   const [folderPath, setFolderPath] = useState(null);
   const [folderFiles, setFolderFiles] = useState([]); // [{ name, path }]
@@ -163,6 +164,19 @@ export default function App() {
   const editorAreaRef = useRef(null);
   // Bridges ordering: useCopilot needs the callback; it's defined below.
   const handleAutoInlineRef = useRef(null);
+
+  // ─── Editor content change — marks document dirty ───────────────────
+  const handleContentChange = useCallback((newContent) => {
+    setContent(newContent);
+    setIsDirty(true);
+  }, []);
+
+  // ─── Confirm before discarding unsaved changes ───────────────────────
+  // Uses the browser's synchronous confirm() which Electron honours.
+  const confirmDiscard = useCallback(() => {
+    if (!isDirty) return true;
+    return window.confirm('You have unsaved changes. Discard them and continue?');
+  }, [isDirty]);
 
   // ─── Resizable split pane (editor ↔ PDF) ───
   const [editorFlex, setEditorFlex] = useState(50); // percentage for editor
@@ -267,15 +281,18 @@ export default function App() {
 
   const handleOpen = useCallback(async () => {
     if (!window.api) return;
+    if (!confirmDiscard()) return;
     const result = await window.api.file.open();
     if (result) {
       setContent(result.content);
       setFilePath(result.filePath);
+      setIsDirty(false);
     }
-  }, []);
+  }, [confirmDiscard]);
 
   const handleOpenFolder = useCallback(async () => {
     if (!window.api) return;
+    if (!confirmDiscard()) return;
     const result = await window.api.file.openFolder();
     if (!result) return;
     setFolderPath(result.folderPath);
@@ -283,24 +300,50 @@ export default function App() {
     // Auto-open main.tex or the first .tex file if present
     const firstTex = (result.files || []).find(f => /\.tex$/i.test(f.name));
     if (firstTex) {
-      const content = await window.api.file.read(firstTex.path);
-      setContent(content);
+      const fileContent = await window.api.file.read(firstTex.path);
+      setContent(fileContent);
       setFilePath(firstTex.path);
+      setIsDirty(false);
     }
-  }, []);
+  }, [confirmDiscard]);
 
   const handleSelectFile = useCallback(async (file) => {
     if (!window.api) return;
-    const content = await window.api.file.read(file.path);
-    setContent(content);
+    if (!confirmDiscard()) return;
+    const fileContent = await window.api.file.read(file.path);
+    setContent(fileContent);
     setFilePath(file.path);
-  }, []);
+    setIsDirty(false);
+  }, [confirmDiscard]);
 
   const handleSave = useCallback(async () => {
-    if (!window.api) return;
+    if (!window.api) return null;
     const savedPath = await window.api.file.save({ filePath, content });
-    if (savedPath) setFilePath(savedPath);
+    if (savedPath) {
+      setFilePath(savedPath);
+      setIsDirty(false);
+    }
+    return savedPath;
   }, [filePath, content]);
+
+  const handleSaveAs = useCallback(async () => {
+    if (!window.api) return null;
+    const savedPath = await window.api.file.saveAs({ filePath, content });
+    if (savedPath) {
+      setFilePath(savedPath);
+      setIsDirty(false);
+    }
+    return savedPath;
+  }, [filePath, content]);
+
+  const handleNew = useCallback(() => {
+    if (!confirmDiscard()) return;
+    setContent('');
+    setFilePath(null);
+    setFolderPath(null);
+    setFolderFiles([]);
+    setIsDirty(false);
+  }, [confirmDiscard]);
 
   const handleCompile = useCallback(async () => {
     if (!window.api) return;
@@ -410,6 +453,50 @@ export default function App() {
   // Keep the ref in sync so useCopilot's IPC listener always sees latest.
   useEffect(() => { handleAutoInlineRef.current = handleAutoInline; }, [handleAutoInline]);
 
+  // ─── Window title: "filename — Fermat" with "•" prefix when dirty ───
+  useEffect(() => {
+    const name = filePath ? filePath.split('/').pop() : 'Untitled';
+    document.title = isDirty ? `• ${name} — Fermat` : `${name} — Fermat`;
+  }, [filePath, isDirty]);
+
+  // ─── Keep main process informed of dirty state ───────────────────────
+  // Main's close handler reads this to decide whether to prompt for save.
+  useEffect(() => {
+    window.api?.window?.setDirty(isDirty);
+  }, [isDirty]);
+
+  // ─── Refs for menu-event handlers (avoids stale closures in one-time listener setup) ───
+  const handleNewRef = useRef(null);
+  const handleOpenRef = useRef(null);
+  const handleOpenFolderRef = useRef(null);
+  const handleSaveRef = useRef(null);
+  const handleSaveAsRef = useRef(null);
+  useEffect(() => { handleNewRef.current = handleNew; }, [handleNew]);
+  useEffect(() => { handleOpenRef.current = handleOpen; }, [handleOpen]);
+  useEffect(() => { handleOpenFolderRef.current = handleOpenFolder; }, [handleOpenFolder]);
+  useEffect(() => { handleSaveRef.current = handleSave; }, [handleSave]);
+  useEffect(() => { handleSaveAsRef.current = handleSaveAs; }, [handleSaveAs]);
+
+  // ─── Subscribe to Electron menu commands (registered once on mount) ──
+  // Allows Cmd+N/O/S/Shift+S to work regardless of where keyboard focus is.
+  useEffect(() => {
+    if (!window.api?.window) return;
+    const offs = [
+      window.api.window.onMenuNew(() => handleNewRef.current?.()),
+      window.api.window.onMenuOpen(() => handleOpenRef.current?.()),
+      window.api.window.onMenuOpenFolder(() => handleOpenFolderRef.current?.()),
+      window.api.window.onMenuSave(() => handleSaveRef.current?.()),
+      window.api.window.onMenuSaveAs(() => handleSaveAsRef.current?.()),
+      window.api.window.onMenuSaveAndClose(async () => {
+        const saved = await handleSaveRef.current?.();
+        // If save succeeded (or was dismissed), force-close the window.
+        // If the user cancelled the save dialog, leave the window open.
+        if (saved) window.api.window.forceClose();
+      }),
+    ];
+    return () => offs.forEach(off => off?.());
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleAcceptProof = useCallback((taskId, proof) => {
     acceptProof(taskId);
     const task = proofTasks.get(taskId);
@@ -431,12 +518,15 @@ export default function App() {
     <div className="app-container">
       <Toolbar
         filePath={filePath}
+        isDirty={isDirty}
         folderPath={folderPath}
         folderFiles={folderFiles}
+        onNew={handleNew}
         onOpen={handleOpen}
         onOpenFolder={handleOpenFolder}
         onSelectFile={handleSelectFile}
         onSave={handleSave}
+        onSaveAs={handleSaveAs}
         onCompile={handleCompile}
         onToggleOutline={() => setShowOutline(!showOutline)}
         onTogglePdf={() => setShowPdf(!showPdf)}
@@ -464,7 +554,7 @@ export default function App() {
           <div className="editor-panel" style={{ flex: showPdf ? `0 0 ${editorFlex}%` : '1 1 auto' }}>
             <TexEditor
               content={content}
-              onChange={setContent}
+              onChange={handleContentChange}
               editorRef={editorRef}
               proofTasks={proofTasks}
               onForwardSearch={handleForwardSearch}
