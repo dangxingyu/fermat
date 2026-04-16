@@ -104,6 +104,22 @@ class LeanRunner {
   // ─── Verification ─────────────────────────────────────────────────────────
 
   /**
+   * Like verify(), but also returns `sorryWarnings` — the subset of warnings
+   * that indicate a `sorry` was used (i.e. the proof is incomplete).
+   *
+   * Lean 4 warning format for sorry:  "declaration uses 'sorry'"
+   *
+   * @returns {Promise<{ success, errors, rawOutput, sorryWarnings: LeanError[] }>}
+   */
+  async verifySorries(leanSource, onLine, signal) {
+    const result = await this.verify(leanSource, onLine, signal);
+    const sorryWarnings = result.errors.filter(
+      e => e.severity === 'warning' && e.message.includes("'sorry'"),
+    );
+    return { ...result, sorryWarnings };
+  }
+
+  /**
    * Run lean on a snippet of Lean 4 source code.
    *
    * When usesMathlib is true and mathlibReady, writes the file inside the

@@ -56,6 +56,9 @@ class FermatEngine extends EventEmitter {
     this.queue = [];
     this.backend = new ClaudeCodeBackend();
     this.leanRunner = new LeanRunner();
+    // Resolvers for the lean statement review pause point.
+    // Maps taskId → resolve fn from the Promise created in _leanSketchFillVerify.
+    this._statementReviewResolvers = new Map();
 
     // Store the latest document content for context assembly
     this._latestContent = '';
@@ -119,6 +122,42 @@ class FermatEngine extends EventEmitter {
     return statuses;
   }
 
+  // ─── Lean statement review controls ──────────────────────────────────────
+
+  /**
+   * Confirm the lean theorem statement — resume the pipeline as-is.
+   */
+  confirmLeanStatement(taskId) {
+    const resolve = this._statementReviewResolvers.get(taskId);
+    if (resolve) {
+      resolve({ action: 'confirm' });
+      this._statementReviewResolvers.delete(taskId);
+    }
+  }
+
+  /**
+   * Submit a user-edited version of the lean sketch — re-verify and continue.
+   * @param {string} newCode — the full edited Lean 4 source
+   */
+  editLeanStatement(taskId, newCode) {
+    const resolve = this._statementReviewResolvers.get(taskId);
+    if (resolve) {
+      resolve({ action: 'edit', newCode });
+      this._statementReviewResolvers.delete(taskId);
+    }
+  }
+
+  /**
+   * Cancel the lean verification pipeline for this task.
+   */
+  cancelLeanStatement(taskId) {
+    const resolve = this._statementReviewResolvers.get(taskId);
+    if (resolve) {
+      resolve({ action: 'cancel' });
+      this._statementReviewResolvers.delete(taskId);
+    }
+  }
+
   /**
    * Record that a proof was accepted — feeds into proof memory for
    * future proofs to reference.
@@ -173,6 +212,19 @@ class FermatEngine extends EventEmitter {
         this.emit('proof:status', { taskId: task.id, ...statusData });
       };
 
+      // Callback invoked by _leanSketchFillVerify when the sketch is ready for review.
+      // Stores the resolver so confirmLeanStatement / editLeanStatement / cancelLeanStatement
+      // can resume the pipeline from the IPC layer.
+      const onStatementReview = ({ statement, sketch, resolve }) => {
+        this._statementReviewResolvers.set(task.id, resolve);
+        this.emit('proof:status', {
+          taskId: task.id,
+          phase: 'lean-statement-review',
+          statement,
+          sketch,
+        });
+      };
+
       const result = await this.backend.prove(content, task.marker, {
         apiKey: modelConfig.apiKey,
         model: modelConfig.model,
@@ -182,6 +234,8 @@ class FermatEngine extends EventEmitter {
         verificationMode: this.config.verificationMode,
         leanRunner: this.leanRunner,
         maxLeanRetries: this.config.lean?.maxRetries ?? 3,
+        onStatementReview,
+        taskId: task.id,
       });
 
       task.status = 'completed';
@@ -197,11 +251,13 @@ class FermatEngine extends EventEmitter {
         sketch: result.sketch || null,
         verdict: result.verdict || null,
         autoInline,
-        // Lean verification results (present when verificationMode === 'lean')
+        // Lean sketch→fill→sorrify results (present when verificationMode === 'lean')
         leanCode: result.leanCode || null,
         leanVerified: result.leanVerified ?? null,
         leanLog: result.leanLog || null,
         leanErrors: result.leanErrors || null,
+        sorries: result.sorries || null,
+        leanStatement: result.leanStatement || null,
       });
     } catch (err) {
       if (err.name === 'AbortError') {

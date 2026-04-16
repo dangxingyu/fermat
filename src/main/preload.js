@@ -72,6 +72,11 @@ contextBridge.exposeInMainWorld('api', {
   lean: {
     getPath: (overridePath) => ipcRenderer.invoke('lean:get-path', overridePath),
     verify: (data) => ipcRenderer.invoke('lean:verify', data),
+    // Statement review controls — resume the pipeline after the user has
+    // inspected (and optionally edited) the generated theorem statement.
+    confirmStatement: (taskId) => ipcRenderer.invoke('lean:confirm-statement', taskId),
+    editStatement: (taskId, newCode) => ipcRenderer.invoke('lean:edit-statement', { taskId, newCode }),
+    cancelStatement: (taskId) => ipcRenderer.invoke('lean:cancel-statement', taskId),
     onOutput: (cb) => {
       const handler = (_e, data) => cb(data);
       ipcRenderer.on('lean:output', handler);

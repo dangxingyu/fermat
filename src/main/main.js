@@ -406,6 +406,22 @@ ipcMain.handle('lean:verify', async (event, { source, taskId }) => {
   }
 });
 
+// ─── Lean statement review controls ───────────────────────────────
+// These IPC handlers let the renderer resume the lean pipeline after the
+// user has reviewed (and optionally edited) the generated theorem statement.
+
+ipcMain.handle('lean:confirm-statement', async (_event, taskId) => {
+  copilotEngine.confirmLeanStatement(taskId);
+});
+
+ipcMain.handle('lean:edit-statement', async (_event, { taskId, newCode }) => {
+  copilotEngine.editLeanStatement(taskId, newCode);
+});
+
+ipcMain.handle('lean:cancel-statement', async (_event, taskId) => {
+  copilotEngine.cancelLeanStatement(taskId);
+});
+
 // ─── Theory Outline ────────────────────────────────────────────────
 ipcMain.handle('outline:parse', async (_event, content) => {
   const { parseTheoryOutline } = require('./outline-parser');

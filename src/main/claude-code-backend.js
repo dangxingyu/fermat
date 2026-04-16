@@ -121,8 +121,10 @@ class ClaudeCodeBackend {
    * @param {string} texContent  — full document content
    * @param {object} marker      — { id, difficulty, label, lineNumber, ... }
    * @param {object} options     — { apiKey, model, skipVerify, onStream, onStatus,
-   *                                  verificationMode, leanRunner, maxLeanRetries }
-   * @returns {object} { proof, verdict?, sketch?, leanCode?, leanVerified?, leanLog? }
+   *                                  verificationMode, leanRunner, maxLeanRetries,
+   *                                  onStatementReview, taskId }
+   * @returns {object} { proof, verdict?, sketch?, leanCode?, leanVerified?, leanLog?,
+   *                     sorries?, leanStatement? }
    */
   async prove(texContent, marker, options = {}) {
     console.log(`[Prove] Starting proof for marker "${marker.label || marker.id}" (line ${marker.lineNumber || '?'})`);
@@ -154,146 +156,389 @@ class ClaudeCodeBackend {
 
     // ── Optional Lean verification pass ──────────────────────────────────────
     if (options.verificationMode === 'lean' && options.leanRunner?.isAvailable) {
-      results = await this._leanVerifyLoop(results, contextPrompt, targetNode, options);
+      results = await this._leanSketchFillVerify(results, contextPrompt, targetNode, options);
     }
 
     return results;
   }
 
+  // ── Lean sketch → fill → sorrify pipeline ─────────────────────────────────
+
   /**
-   * Generate Lean 4 code for the proof and run lean on it, retrying on
-   * failure up to options.maxLeanRetries times (default 3).
+   * Three-phase Lean 4 verification pipeline.
    *
-   * Streams status events via options.onStatus:
-   *   { phase: 'generating-lean' | 'verifying' | 'lean-retry' | 'lean-verified' | 'lean-failed',
-   *     attempt, maxAttempts }
+   * Phase 1 – Sketch:
+   *   Claude generates a proof skeleton with `sorry` for non-trivial steps.
+   *   lean type-checks the skeleton; retries up to 2× on structural errors.
+   *   ⏸ Statement Review: pauses and waits for user to confirm the theorem statement.
+   *
+   * Phase 2 – Fill:
+   *   For each sorry, Claude fills in the proof; lean verifies each fill.
+   *
+   * Phase 3 – Sorrify on failure:
+   *   Failed fills are retried with error context. If still failing after
+   *   maxLeanRetries attempts the sorry is kept (lean-partial result).
+   *
+   * Status events emitted via options.onStatus:
+   *   lean-sketching | lean-sketch-retry | lean-sketch-checking | lean-sketch-ok
+   *   lean-statement-review  ← ⏸ waits for options.onStatementReview resolution
+   *   lean-filling (sorryIndex/total) | lean-fill-ok | lean-fill-retry | lean-fill-failed
+   *   lean-verified | lean-partial | lean-failed
    */
-  async _leanVerifyLoop(results, contextPrompt, targetNode, options) {
+  async _leanSketchFillVerify(results, contextPrompt, targetNode, options) {
     const { onStream, onStatus, leanRunner, apiKey, model } = options;
-    const maxRetries = options.maxLeanRetries ?? 3;
+    const maxSketchRetries = 2;
+    const maxFillRetries = options.maxLeanRetries ?? 3;
+    const LEAN_SYS = 'You are a Lean 4 proof assistant. Output only valid Lean 4 code in a ```lean4 block.';
 
     const emitStatus = (phase, extra = {}) => {
       if (onStatus) onStatus({ phase, ...extra });
-      console.log(`[LeanVerify] ${phase}`, extra);
+      console.log(`[LeanSFV] ${phase}`, extra);
     };
 
-    let leanCode = null;
-    let leanLog = '';
-    let leanErrors = [];
-    let leanVerified = false;
+    // ── Phase 1: Sketch ────────────────────────────────────────────────────
+    let sketch = null;
+    let sketchErrors = [];
+    let sketchLog = '';
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      emitStatus(attempt === 1 ? 'generating-lean' : 'lean-retry', { attempt, maxAttempts: maxRetries });
-
-      // ── Step 1: ask Claude to generate Lean 4 code ────────────────────
-      const leanGenPrompt = this._buildLeanGenPrompt(contextPrompt, results.proof, leanCode, leanErrors, attempt);
+    for (let attempt = 1; attempt <= maxSketchRetries + 1; attempt++) {
+      emitStatus(attempt === 1 ? 'lean-sketching' : 'lean-sketch-retry',
+        { attempt, maxAttempts: maxSketchRetries + 1 });
 
       try {
-        if (this._hasClaudeCli) {
-          leanCode = await this._runClaude(leanGenPrompt, onStream);
-        } else {
-          const Anthropic = require('@anthropic-ai/sdk');
-          const client = new Anthropic({ apiKey });
-          const modelId = model || 'claude-sonnet-4-6';
-          let text = '';
-          const stream = await client.messages.stream({
-            model: modelId, max_tokens: 4096,
-            system: 'You are a Lean 4 proof assistant. Output only valid Lean 4 code, no prose.',
-            messages: [{ role: 'user', content: leanGenPrompt }],
-          });
-          for await (const ev of stream) {
-            if (ev.type === 'content_block_delta' && ev.delta?.text) {
-              text += ev.delta.text;
-              if (onStream) onStream(ev.delta.text);
-            }
-          }
-          leanCode = text;
-        }
+        const raw = await this._callLlm(
+          this._buildSketchPrompt(contextPrompt, results.proof, sketch, sketchErrors, attempt),
+          onStream, apiKey, model, LEAN_SYS,
+        );
+        sketch = this._extractLeanBlock(raw) || raw.trim();
       } catch (err) {
-        console.error('[LeanVerify] Lean code generation failed:', err.message);
+        console.error('[LeanSFV] Sketch gen failed:', err.message);
+        emitStatus('lean-failed', { reason: 'sketch-gen-error' });
+        return { ...results, leanCode: null, leanVerified: false, leanLog: '', leanErrors: [], sorries: [] };
+      }
+
+      emitStatus('lean-sketch-checking', { attempt });
+      sketchLog = '';
+      const sketchResult = await leanRunner.verify(sketch, (line) => {
+        sketchLog += line + '\n';
+        if (onStream) onStream(`[lean] ${line}`);
+      });
+      sketchErrors = sketchResult.errors.filter(e => e.severity === 'error');
+
+      if (sketchErrors.length === 0) {
+        emitStatus('lean-sketch-ok', { attempt });
+        // If no sorries at all, the sketch IS the complete proof
+        if (!sketch.match(/\bsorry\b/)) {
+          emitStatus('lean-verified', {});
+          return {
+            ...results,
+            leanCode: sketch,
+            leanVerified: true,
+            leanLog: sketchLog.trim(),
+            leanErrors: [],
+            sorries: [],
+            leanStatement: this._parseTheoremStatement(sketch),
+          };
+        }
+        break; // proceed to statement review
+      }
+
+      if (attempt > maxSketchRetries) {
+        emitStatus('lean-failed', { reason: 'sketch-failed', errorCount: sketchErrors.length });
+        return {
+          ...results,
+          leanCode: sketch,
+          leanVerified: false,
+          leanLog: sketchLog.trim(),
+          leanErrors: sketchErrors,
+          sorries: [],
+        };
+      }
+    }
+
+    // ── ⏸ Statement Review ────────────────────────────────────────────────
+    // Pause pipeline and let the user confirm (or edit/cancel) the theorem statement.
+    const statement = this._parseTheoremStatement(sketch);
+    emitStatus('lean-statement-review', { statement, sketch });
+
+    if (options.onStatementReview) {
+      const reviewResult = await new Promise((resolve) => {
+        options.onStatementReview({ statement, sketch, resolve });
+      });
+
+      if (reviewResult.action === 'cancel') {
+        emitStatus('lean-failed', { reason: 'user-cancelled' });
+        return { ...results, leanCode: sketch, leanVerified: false, leanLog: sketchLog.trim(), leanErrors: [], sorries: [] };
+      }
+
+      if (reviewResult.action === 'edit' && reviewResult.newCode) {
+        // Re-verify the user-edited sketch before proceeding
+        sketch = reviewResult.newCode;
+        sketchLog = '';
+        const recheck = await leanRunner.verify(sketch, (line) => {
+          sketchLog += line + '\n';
+          if (onStream) onStream(`[lean] ${line}`);
+        });
+        sketchErrors = recheck.errors.filter(e => e.severity === 'error');
+        if (sketchErrors.length > 0) {
+          console.warn('[LeanSFV] User-edited sketch has errors; proceeding anyway per user choice');
+        }
+      }
+      // action === 'confirm': fall through
+    }
+
+    // ── Parse sorries ──────────────────────────────────────────────────────
+    const sorries = this._parseSorries(sketch);
+    console.log(`[LeanSFV] Parsed ${sorries.length} sorries from sketch`);
+    const sorryStatuses = sorries.map((s, i) => ({
+      ...s, index: i, status: 'pending', fillCode: null, errors: null,
+    }));
+
+    let currentCode = sketch;
+    let leanLog = sketchLog;
+
+    // ── Phase 2 & 3: Fill each sorry ──────────────────────────────────────
+    for (let i = 0; i < sorries.length; i++) {
+      // Early exit if all remaining sorries already gone (earlier fill was generous)
+      if (!(currentCode.match(/\bsorry\b/g) || []).length) {
+        sorryStatuses.slice(i).forEach(s => { s.status = 'filled'; s.fillCode = currentCode; });
         break;
       }
 
-      // Extract ```lean4 ... ``` block if present
-      leanCode = this._extractLeanBlock(leanCode);
+      const sorry = sorryStatuses[i];
+      sorry.status = 'filling';
+      emitStatus('lean-filling', {
+        sorryIndex: i, total: sorries.length,
+        filled: sorryStatuses.filter(s => s.status === 'filled').length,
+      });
 
-      // ── Step 2: run lean on it ─────────────────────────────────────────
-      emitStatus('verifying', { attempt, maxAttempts: maxRetries });
-      leanLog = '';
-      leanErrors = [];
+      const prevSorryCount = (currentCode.match(/\bsorry\b/g) || []).length;
+      let fillErrors = [];
+      let lastCandidate = currentCode;
 
-      try {
-        const result = await leanRunner.verify(
-          leanCode,
-          (line) => {
-            leanLog += line + '\n';
-            if (onStream) onStream(`[lean] ${line}`);
-          },
-        );
+      for (let attempt = 1; attempt <= maxFillRetries; attempt++) {
+        if (attempt > 1) {
+          emitStatus('lean-fill-retry', { sorryIndex: i, attempt, maxAttempts: maxFillRetries });
+        }
 
-        leanErrors = result.errors.filter(e => e.severity === 'error');
+        const prompt = attempt === 1
+          ? this._buildFillPrompt(currentCode, sorry, i, sorries.length, results.proof, contextPrompt)
+          : this._buildDiagnosePrompt(lastCandidate, sorry, fillErrors, contextPrompt);
 
-        if (result.success) {
-          leanVerified = true;
-          emitStatus('lean-verified', { attempt, maxAttempts: maxRetries });
+        let rawFill;
+        try {
+          rawFill = await this._callLlm(prompt, onStream, apiKey, model, LEAN_SYS);
+        } catch (err) {
+          console.error(`[LeanSFV] Fill ${i} attempt ${attempt} error:`, err.message);
           break;
         }
 
-        console.log(`[LeanVerify] Attempt ${attempt} failed (${leanErrors.length} errors)`);
-      } catch (err) {
-        console.error('[LeanVerify] lean runner threw:', err.message);
-        leanErrors = [{ line: 0, col: 0, severity: 'error', message: err.message }];
+        const candidate = this._extractLeanBlock(rawFill) || rawFill.trim();
+        lastCandidate = candidate;
+
+        let lineOut = '';
+        const fillResult = await leanRunner.verify(candidate, (line) => {
+          lineOut += line + '\n';
+          if (onStream) onStream(`[lean] ${line}`);
+        });
+        leanLog = lineOut;
+        fillErrors = fillResult.errors.filter(e => e.severity === 'error');
+
+        const newSorryCount = (candidate.match(/\bsorry\b/g) || []).length;
+        const madeProgress = newSorryCount < prevSorryCount;
+
+        if (fillErrors.length === 0 && madeProgress) {
+          currentCode = candidate;
+          sorry.status = 'filled';
+          sorry.fillCode = candidate;
+          emitStatus('lean-fill-ok', { sorryIndex: i, total: sorries.length });
+          break;
+        }
+
+        if (!madeProgress) {
+          // Claude didn't remove the sorry — synthesise an error to trigger retry
+          fillErrors = [
+            ...fillErrors,
+            { severity: 'error', line: 0, col: 0, message: 'Sorry was not filled — no progress made' },
+          ];
+        }
+
+        if (attempt >= maxFillRetries) {
+          sorry.status = 'failed';
+          sorry.errors = fillErrors.filter(e => e.message !== 'Sorry was not filled — no progress made');
+          emitStatus('lean-fill-failed', { sorryIndex: i, total: sorries.length });
+        }
       }
     }
 
-    if (!leanVerified) {
-      emitStatus('lean-failed', { maxAttempts: maxRetries, errorCount: leanErrors.length });
-    }
+    // ── Final verdict ──────────────────────────────────────────────────────
+    const allFilled  = sorryStatuses.every(s => s.status === 'filled');
+    const anyFilled  = sorryStatuses.some(s => s.status === 'filled');
+    const remainingSorries = (currentCode.match(/\bsorry\b/g) || []).length;
+
+    let finalLog = '';
+    const finalResult = await leanRunner.verify(currentCode, (line) => { finalLog += line + '\n'; });
+    const finalErrors = finalResult.errors.filter(e => e.severity === 'error');
+    const leanVerified = finalErrors.length === 0 && remainingSorries === 0;
+
+    if (leanVerified)   emitStatus('lean-verified', { sorries: sorryStatuses });
+    else if (anyFilled) emitStatus('lean-partial',  { sorries: sorryStatuses });
+    else                emitStatus('lean-failed',   { sorries: sorryStatuses });
 
     return {
       ...results,
-      leanCode: leanCode || null,
+      leanCode: currentCode,
       leanVerified,
-      leanLog: leanLog.trim(),
-      leanErrors,
+      leanLog: finalLog.trim(),
+      leanErrors: finalErrors,
+      sorries: sorryStatuses,
+      leanStatement: this._parseTheoremStatement(currentCode),
     };
   }
 
   /**
-   * Build the prompt that asks Claude to produce Lean 4 code.
-   * On retry, appends the previous errors so Claude can self-correct.
+   * Unified LLM call — uses Claude CLI when available, direct API otherwise.
+   * @param {string} [systemPrompt] — system instructions (prepended for CLI, separate param for API)
    */
-  _buildLeanGenPrompt(contextPrompt, latexProof, prevLeanCode, prevErrors, attempt) {
-    const header = attempt === 1
-      ? `Given the following mathematical theorem and its LaTeX proof, write a complete, compilable Lean 4 proof.
+  async _callLlm(prompt, onStream, apiKey, model, systemPrompt = '') {
+    if (this._hasClaudeCli) {
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
+      return this._runClaude(fullPrompt, onStream);
+    }
+    const Anthropic = require('@anthropic-ai/sdk');
+    const client = new Anthropic({ apiKey });
+    const modelId = model || 'claude-sonnet-4-6';
+    let text = '';
+    const msgParams = {
+      model: modelId,
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: prompt }],
+    };
+    if (systemPrompt) msgParams.system = systemPrompt;
+    const stream = await client.messages.stream(msgParams);
+    for await (const ev of stream) {
+      if (ev.type === 'content_block_delta' && ev.delta?.text) {
+        text += ev.delta.text;
+        if (onStream) onStream(ev.delta.text);
+      }
+    }
+    return text;
+  }
 
-Rules:
-- Output ONLY a Lean 4 code block (no prose, no markdown outside the code block).
-- Start with any necessary imports (e.g. \`import Std\`).
-- Define or use a namespace if needed.
-- Do NOT use \`sorry\`.
-- The theorem statement must match the LaTeX statement semantically.
+  /** Build the sketch-generation prompt (Phase 1). */
+  _buildSketchPrompt(contextPrompt, naturalProof, prevSketch, prevErrors, attempt) {
+    if (attempt === 1) {
+      return `You are generating a Lean 4 proof skeleton.
 
+RULES:
+- Use \`sorry\` as a placeholder for non-trivial proof steps.
+- The output MUST type-check with \`sorry\` allowed (no structural or syntax errors).
+- Annotate each sorry's expected type with \`show T; sorry\` where possible.
+- Do NOT fill in real proofs for sorry placeholders — just build the skeleton.
+- Output ONLY a \`\`\`lean4 ... \`\`\` code block, nothing else.
+
+MATHEMATICAL CONTEXT:
 ${contextPrompt}
 
-LaTeX proof to formalise:
-${latexProof}`
-      : `Your previous Lean 4 proof attempt had errors. Fix them and output a corrected, complete Lean 4 proof.
+INFORMAL PROOF TO FORMALIZE:
+${naturalProof}`;
+    }
 
-Original context:
-${contextPrompt}
+    return `Your previous Lean 4 proof sketch had structural errors. Fix the STRUCTURE only.
+Keep all \`sorry\` placeholders as-is — do not fill them in.
 
-Previous Lean code:
+Previous sketch:
 \`\`\`lean4
-${prevLeanCode}
+${prevSketch}
 \`\`\`
 
-Lean errors:
+Errors to fix:
 ${prevErrors.map(e => `  line ${e.line}: ${e.message}`).join('\n')}
 
-Output ONLY the corrected Lean 4 code block.`;
+Output the corrected \`\`\`lean4 ... \`\`\` code block.`;
+  }
 
-    return header;
+  /**
+   * Parse the positions and context of every `sorry` in the given Lean code.
+   * Returns [{ line, col, surroundingCode, expectedType }].
+   */
+  _parseSorries(code) {
+    const lines = code.split('\n');
+    const sorries = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!/\bsorry\b/.test(lines[i])) continue;
+      const col = lines[i].indexOf('sorry');
+      // Try to extract annotated expected type from `show T; sorry` or `(sorry : T)`
+      const showMatch  = lines[i].match(/\bshow\s+(.+?);\s*sorry\b/);
+      const annotMatch = lines[i].match(/\(\s*sorry\s*:\s*([^)]+)\)/);
+      const expectedType = (showMatch?.[1] || annotMatch?.[1] || '').trim() || null;
+      // ±5 lines context
+      const ctxLines = lines.slice(Math.max(0, i - 5), Math.min(lines.length, i + 3));
+      sorries.push({ line: i + 1, col, expectedType, surroundingCode: ctxLines.join('\n') });
+    }
+    return sorries;
+  }
+
+  /** Build the fill prompt for sorry #sorryIndex (Phase 2). */
+  _buildFillPrompt(currentCode, sorry, sorryIndex, total, naturalProof, contextPrompt) {
+    const typeHint = sorry.expectedType ? `\nExpected type: \`${sorry.expectedType}\`` : '';
+    return `Fill in exactly ONE \`sorry\` in the following Lean 4 proof sketch.
+
+SKETCH (filling sorry ${sorryIndex + 1} of ${total}):
+\`\`\`lean4
+${currentCode}
+\`\`\`
+
+The sorry to fill is near line ${sorry.line}:
+\`\`\`
+${sorry.surroundingCode}
+\`\`\`
+${typeHint}
+
+INFORMAL PROOF CONTEXT:
+${naturalProof}
+
+${contextPrompt.slice(0, 800)}
+
+OUTPUT: The complete Lean 4 code with sorry #${sorryIndex + 1} replaced by a working proof.
+Keep all OTHER \`sorry\` placeholders unchanged.
+Output ONLY a \`\`\`lean4 ... \`\`\` code block.`;
+  }
+
+  /** Build the diagnose/retry prompt for a failed fill (Phase 3). */
+  _buildDiagnosePrompt(code, sorry, errors, contextPrompt) {
+    return `The following Lean 4 proof attempt failed. Fix the errors.
+
+CURRENT CODE:
+\`\`\`lean4
+${code}
+\`\`\`
+
+LEAN ERRORS:
+${errors.map(e => `  line ${e.line}: ${e.message}`).join('\n')}
+
+TARGET SUBGOAL (near line ${sorry.line}):
+\`\`\`
+${sorry.surroundingCode}
+\`\`\`
+
+${contextPrompt.slice(0, 600)}
+
+Output the COMPLETE corrected \`\`\`lean4 ... \`\`\` code block.
+Keep unrelated \`sorry\` placeholders unchanged.`;
+  }
+
+  /**
+   * Extract the theorem/lemma declaration header from Lean 4 code.
+   * Returns the part before `:= by` or `:=`.
+   */
+  _parseTheoremStatement(code) {
+    if (!code) return null;
+    const assignIdx = code.search(/:=\s*(by\b|\{)/);
+    if (assignIdx >= 0) return code.slice(0, assignIdx).trim();
+    // Fallback: first meaningful lines (skip imports/opens/comments)
+    const lines = code.split('\n').filter(l => l.trim() && !l.startsWith('import') && !l.startsWith('open') && !l.startsWith('--') && !l.startsWith('/-'));
+    return lines.slice(0, 5).join('\n');
   }
 
   /**

@@ -519,10 +519,15 @@ export default function App() {
 
     // proof:status carries Lean phase transitions
     const offStatus = window.api.copilot.onProofStatus?.((data) => {
-      const leanPhases = ['generating-lean', 'verifying', 'lean-retry', 'lean-verified', 'lean-failed'];
+      const leanPhases = [
+        'lean-sketching', 'lean-sketch-retry', 'lean-sketch-checking', 'lean-sketch-ok',
+        'lean-statement-review',
+        'lean-filling', 'lean-fill-ok', 'lean-fill-retry', 'lean-fill-failed',
+        'lean-verified', 'lean-partial', 'lean-failed',
+      ];
       if (!leanPhases.includes(data.phase)) return;
 
-      if (data.phase === 'generating-lean' && data.attempt === 1) {
+      if (data.phase === 'lean-sketching' && data.attempt === 1) {
         // New lean pass starting — reset output buffer and switch to Lean tab
         leanOutputLinesRef.current = [];
         setRightTab('lean');
@@ -534,6 +539,11 @@ export default function App() {
         attempt: data.attempt,
         maxAttempts: data.maxAttempts,
         outputLines: leanOutputLinesRef.current,
+        // Statement review fields (only present on lean-statement-review event)
+        ...(data.statement !== undefined ? { statement: data.statement } : {}),
+        ...(data.sketch    !== undefined ? { sketch:    data.sketch    } : {}),
+        // Preserve sorries if provided
+        ...(data.sorries   !== undefined ? { sorries:   data.sorries   } : {}),
       }));
     });
 
@@ -548,8 +558,12 @@ export default function App() {
           leanVerified: data.leanVerified,
           leanLog: data.leanLog,
           leanErrors: data.leanErrors,
+          sorries: data.sorries ?? prev?.sorries ?? null,
+          leanStatement: data.leanStatement ?? prev?.leanStatement ?? null,
           outputLines: leanOutputLinesRef.current,
-          phase: data.leanVerified ? 'lean-verified' : 'lean-failed',
+          phase: data.leanVerified ? 'lean-verified'
+               : (data.sorries?.some(s => s.status === 'filled')) ? 'lean-partial'
+               : 'lean-failed',
         }));
       }
     });
@@ -560,6 +574,19 @@ export default function App() {
       offCompleted?.();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ─── Lean statement review controls ────────────────────────────────────────
+  const handleConfirmStatement = useCallback((taskId) => {
+    window.api?.lean?.confirmStatement?.(taskId);
+  }, []);
+
+  const handleEditStatement = useCallback((taskId, newCode) => {
+    window.api?.lean?.editStatement?.(taskId, newCode);
+  }, []);
+
+  const handleCancelStatement = useCallback((taskId) => {
+    window.api?.lean?.cancelStatement?.(taskId);
+  }, []);
 
   const handleAcceptProof = useCallback((taskId, proof) => {
     acceptProof(taskId);
@@ -669,7 +696,12 @@ export default function App() {
                       onInverseSearch={handleInverseSearch}
                       forwardHighlight={forwardHighlight}
                     />
-                  : <LeanPanel leanState={leanState} />
+                  : <LeanPanel
+                      leanState={leanState}
+                      onConfirmStatement={handleConfirmStatement}
+                      onEditStatement={handleEditStatement}
+                      onCancelStatement={handleCancelStatement}
+                    />
                 }
               </div>
             </>
