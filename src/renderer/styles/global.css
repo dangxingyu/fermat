@@ -395,6 +395,7 @@ body::before {
 
 .pdf-panel {
   flex: 1;
+  min-width: 0; /* prevent flex item from expanding beyond its share with wide PDF content */
   background: #16110d;
   border-left: 1px solid var(--border);
   display: flex;

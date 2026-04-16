@@ -35,6 +35,7 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
   const [totalPages, setTotalPages] = useState(0);
   const [currentPage, setCurrentPage] = useState(1); // derived from scroll
   const pdfDocRef = useRef(null);
+  const panelRef = useRef(null);   // outer .pdf-panel — its width is the true container width
   const viewerRef = useRef(null);
   const pageContainerRefs = useRef([]); // DOM refs per page
   const renderStateRef = useRef(new Map()); // pageNum -> 'rendering' | 'done'
@@ -97,12 +98,16 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
       // ~900px wide — bigger than the panel once the editor is also on
       // screen. Fit-to-width gives a sane default and the user can still
       // zoom in / out from there.
+      const panel = panelRef.current;
       const viewer = viewerRef.current;
-      if (viewer && !didInitialFitRef.current) {
+      if (panel && viewer && !didInitialFitRef.current) {
         const cs = window.getComputedStyle(viewer);
         const padL = parseFloat(cs.paddingLeft) || 0;
         const padR = parseFloat(cs.paddingRight) || 0;
-        const availableWidth = viewer.clientWidth - padL - padR;
+        // Use panel.clientWidth (true container width) rather than
+        // viewer.clientWidth which can expand with PDF content when the
+        // flex parent lacks min-width:0.
+        const availableWidth = panel.clientWidth - padL - padR;
         if (availableWidth > 0 && vp.width > 0) {
           const fitZoom = Math.floor((availableWidth / (vp.width * 1.5)) * 100);
           setZoom(Math.min(200, Math.max(25, fitZoom)));
@@ -347,15 +352,24 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
   // ─── Fit to width: scale so the page fills the viewer horizontally ───
   // Pure calculation from refs + DOM — no dependency on `zoom` state,
   // so it converges in a single click regardless of current zoom level.
+  //
+  // IMPORTANT: measure panelRef (the outer .pdf-panel flex item) instead of
+  // viewerRef.  When zoom is large the PDF pages are wider than the panel, and
+  // without min-width:0 on the flex item the browser can report
+  // viewer.clientWidth ≈ page width instead of container width, making
+  // fitZoom ≈ currentZoom-1 (off-by-one loop that never converges).
   const handleFitWidth = useCallback(() => {
+    const panel = panelRef.current;
     const viewer = viewerRef.current;
     const nativeW = nativePageWidthRef.current;
-    if (!viewer || !nativeW || nativeW <= 0) return;
+    if (!panel || !viewer || !nativeW || nativeW <= 0) return;
 
     const cs = window.getComputedStyle(viewer);
     const padL = parseFloat(cs.paddingLeft) || 0;
     const padR = parseFloat(cs.paddingRight) || 0;
-    const availableWidth = viewer.clientWidth - padL - padR;
+    // panel.clientWidth is always the true container width because .pdf-panel
+    // is constrained by the flex layout (min-width:0 in CSS).
+    const availableWidth = panel.clientWidth - padL - padR;
     if (availableWidth <= 0) return;
 
     // pageWidth at zoom Z = nativeW * (Z / 100) * 1.5
@@ -377,7 +391,7 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
   }, []);
 
   return (
-    <div className="pdf-panel">
+    <div className="pdf-panel" ref={panelRef}>
       <div className="pdf-toolbar">
         <button
           onClick={handleCompile}
