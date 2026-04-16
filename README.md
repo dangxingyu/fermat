@@ -6,6 +6,13 @@ Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, a
 
 ---
 
+## Screenshot
+
+<!-- TODO(xingyu): drop a real screenshot at docs/screenshot.png -->
+![Fermat editor screenshot](docs/screenshot.png)
+
+---
+
 ## Installation
 
 ```bash
