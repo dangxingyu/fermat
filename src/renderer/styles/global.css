@@ -396,6 +396,7 @@ body::before {
 .pdf-panel {
   flex: 1;
   min-width: 0; /* prevent flex item from expanding beyond its share with wide PDF content */
+  min-height: 0; /* prevent tall page stack from pushing .pdf-viewer past the container */
   background: #16110d;
   border-left: 1px solid var(--border);
   display: flex;
