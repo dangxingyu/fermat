@@ -3,6 +3,7 @@ import Toolbar from './Toolbar';
 import TheoryOutline from './TheoryOutline';
 import TexEditor from './TexEditor';
 import PdfViewer from './PdfViewer';
+import LeanPanel from './LeanPanel';
 import ProofReviewPanel from './ProofReviewPanel';
 import SettingsModal from './SettingsModal';
 import LogPanel from './LogPanel';
@@ -236,6 +237,14 @@ export default function App() {
   // SyncTeX state
   const synctexRef = useRef(null); // { synctexPath, texPath }
   const [forwardHighlight, setForwardHighlight] = useState(null);
+
+  // ─── Right-panel tab: 'pdf' | 'lean' ─────────────────────────────────────
+  const [rightTab, setRightTab] = useState('pdf');
+
+  // ─── Lean verification state ──────────────────────────────────────────────
+  // Accumulates output lines live; reset when a new proof task starts lean phase.
+  const [leanState, setLeanState] = useState(null);
+  const leanOutputLinesRef = useRef([]);
 
   // ─── Auto-update state ────────────────────────────────────────────
   // 'idle' | 'available' | 'downloading' | 'ready'
@@ -497,6 +506,61 @@ export default function App() {
     return () => offs.forEach(off => off?.());
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ─── Lean verification event wiring ────────────────────────────────────────
+  // Listen to per-line output from lean and to proof:status phase changes.
+  useEffect(() => {
+    if (!window.api) return;
+
+    // Live lean output lines
+    const offOutput = window.api.lean?.onOutput?.((data) => {
+      leanOutputLinesRef.current = [...leanOutputLinesRef.current, data.line];
+      setLeanState(prev => prev ? { ...prev, outputLines: leanOutputLinesRef.current } : prev);
+    });
+
+    // proof:status carries Lean phase transitions
+    const offStatus = window.api.copilot.onProofStatus?.((data) => {
+      const leanPhases = ['generating-lean', 'verifying', 'lean-retry', 'lean-verified', 'lean-failed'];
+      if (!leanPhases.includes(data.phase)) return;
+
+      if (data.phase === 'generating-lean' && data.attempt === 1) {
+        // New lean pass starting — reset output buffer and switch to Lean tab
+        leanOutputLinesRef.current = [];
+        setRightTab('lean');
+      }
+      setLeanState(prev => ({
+        ...(prev || {}),
+        taskId: data.taskId,
+        phase: data.phase,
+        attempt: data.attempt,
+        maxAttempts: data.maxAttempts,
+        outputLines: leanOutputLinesRef.current,
+      }));
+    });
+
+    // proof:completed carries final lean results
+    const offCompleted = window.api.copilot.onProofCompleted?.((data) => {
+      if (data.leanCode !== undefined) {
+        setLeanState(prev => ({
+          ...(prev || {}),
+          taskId: data.taskId,
+          label: data.marker?.label || '',
+          leanCode: data.leanCode,
+          leanVerified: data.leanVerified,
+          leanLog: data.leanLog,
+          leanErrors: data.leanErrors,
+          outputLines: leanOutputLinesRef.current,
+          phase: data.leanVerified ? 'lean-verified' : 'lean-failed',
+        }));
+      }
+    });
+
+    return () => {
+      offOutput?.();
+      offStatus?.();
+      offCompleted?.();
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleAcceptProof = useCallback((taskId, proof) => {
     acceptProof(taskId);
     const task = proofTasks.get(taskId);
@@ -566,11 +630,48 @@ export default function App() {
           {showPdf && (
             <>
               <div className="resizer" onMouseDown={handleResizerMouseDown} />
-              <PdfViewer
-                onCompile={handleCompile}
-                onInverseSearch={handleInverseSearch}
-                forwardHighlight={forwardHighlight}
-              />
+              {/* ── Right panel: PDF / Lean tab switcher ─────────────── */}
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+                {/* Tab bar — only shown when Lean mode is active */}
+                {leanState && (
+                  <div style={{
+                    display: 'flex', gap: 0, background: 'var(--bg-secondary)',
+                    borderBottom: '1px solid var(--border)', flexShrink: 0,
+                  }}>
+                    {['pdf', 'lean'].map(tab => (
+                      <button
+                        key={tab}
+                        onClick={() => setRightTab(tab)}
+                        style={{
+                          background: 'none', border: 'none', padding: '6px 16px',
+                          fontSize: 11, cursor: 'pointer', fontFamily: 'var(--font-display)',
+                          fontStyle: 'italic',
+                          color: rightTab === tab ? 'var(--accent)' : 'var(--text-muted)',
+                          borderBottom: rightTab === tab ? '2px solid var(--accent)' : '2px solid transparent',
+                          marginBottom: -1,
+                        }}
+                      >
+                        {tab === 'pdf' ? 'PDF' : (
+                          <>
+                            Lean
+                            {leanState.leanVerified === true  && <span style={{ marginLeft: 4, color: 'var(--verdigris)' }}>✓</span>}
+                            {leanState.leanVerified === false && <span style={{ marginLeft: 4, color: 'var(--vermillion)' }}>✗</span>}
+                          </>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {/* Panel content */}
+                {rightTab === 'pdf' || !leanState
+                  ? <PdfViewer
+                      onCompile={handleCompile}
+                      onInverseSearch={handleInverseSearch}
+                      forwardHighlight={forwardHighlight}
+                    />
+                  : <LeanPanel leanState={leanState} />
+                }
+              </div>
             </>
           )}
         </div>

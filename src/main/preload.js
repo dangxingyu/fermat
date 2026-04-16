@@ -68,6 +68,17 @@ contextBridge.exposeInMainWorld('api', {
     },
   },
 
+  // Lean 4 verification
+  lean: {
+    getPath: (overridePath) => ipcRenderer.invoke('lean:get-path', overridePath),
+    verify: (data) => ipcRenderer.invoke('lean:verify', data),
+    onOutput: (cb) => {
+      const handler = (_e, data) => cb(data);
+      ipcRenderer.on('lean:output', handler);
+      return () => ipcRenderer.removeListener('lean:output', handler);
+    },
+  },
+
   // SyncTeX (source ↔ PDF mapping)
   synctex: {
     forward: (data) => ipcRenderer.invoke('synctex:forward', data),

@@ -1,6 +1,7 @@
 const { EventEmitter } = require('events');
 const { v4: uuidv4 } = require('uuid');
 const { ClaudeCodeBackend } = require('./claude-code-backend');
+const { LeanRunner } = require('./lean-runner');
 
 /**
  * FermatEngine
@@ -47,11 +48,14 @@ class FermatEngine extends EventEmitter {
       maxConcurrent: 3,
       autoInlineDifficulty: ['Easy'],
       skipVerifyDifficulty: ['Easy'],  // Skip verification for easy proofs
+      verificationMode: 'off',         // 'off' | 'lean'
+      lean: { binaryPath: '', maxRetries: 3 },
     };
     this.tasks = new Map();
     this.running = 0;
     this.queue = [];
     this.backend = new ClaudeCodeBackend();
+    this.leanRunner = new LeanRunner();
 
     // Store the latest document content for context assembly
     this._latestContent = '';
@@ -59,6 +63,10 @@ class FermatEngine extends EventEmitter {
 
   configure(config) {
     Object.assign(this.config, config);
+    // Re-detect lean binary when the lean config changes
+    if (config?.lean?.binaryPath !== undefined || config?.verificationMode) {
+      this.leanRunner.detect(this.config.lean?.binaryPath || undefined);
+    }
   }
 
   /**
@@ -160,11 +168,19 @@ class FermatEngine extends EventEmitter {
 
       updateStatus(difficulty === 'Easy' ? 'proving' : 'sketching');
 
+      const onStatus = (statusData) => {
+        this.emit('proof:status', { taskId: task.id, ...statusData });
+      };
+
       const result = await this.backend.prove(content, task.marker, {
         apiKey: modelConfig.apiKey,
         model: modelConfig.model,
         skipVerify: this.config.skipVerifyDifficulty.includes(difficulty),
         onStream,
+        onStatus,
+        verificationMode: this.config.verificationMode,
+        leanRunner: this.leanRunner,
+        maxLeanRetries: this.config.lean?.maxRetries ?? 3,
       });
 
       task.status = 'completed';
@@ -180,6 +196,11 @@ class FermatEngine extends EventEmitter {
         sketch: result.sketch || null,
         verdict: result.verdict || null,
         autoInline,
+        // Lean verification results (present when verificationMode === 'lean')
+        leanCode: result.leanCode || null,
+        leanVerified: result.leanVerified ?? null,
+        leanLog: result.leanLog || null,
+        leanErrors: result.leanErrors || null,
       });
     } catch (err) {
       if (err.name === 'AbortError') {

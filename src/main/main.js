@@ -4,6 +4,7 @@ const fs = require('fs');
 const { FermatEngine } = require('./copilot-engine');
 const { TexCompiler } = require('./tex-compiler');
 const { SynctexBridge } = require('./synctex-bridge');
+const { LeanRunner } = require('./lean-runner');
 
 // ─── Auto-updater (electron-updater → GitHub Releases) ────────────────────
 // Only active in packaged builds; skipped in dev mode so dev startup is fast.
@@ -24,6 +25,7 @@ let mainWindow;
 let copilotEngine;
 let texCompiler;
 let synctexBridge;
+let leanRunner;
 
 // Renderer reports its dirty state here so the close handler can decide.
 let isDirtyInRenderer = false;
@@ -100,6 +102,8 @@ function createWindow() {
   copilotEngine = new FermatEngine();
   texCompiler = new TexCompiler();
   synctexBridge = new SynctexBridge();
+  leanRunner = new LeanRunner();
+  leanRunner.detect(); // auto-detect on startup; re-detected when settings change
 
   // ─── Auto-updater events ───────────────────────────────────────────
   if (autoUpdater) {
@@ -343,6 +347,10 @@ ipcMain.handle('copilot:configure', async (_event, config) => {
   } else {
     console.log('[Copilot] Configured WITHOUT Claude API key — will rely on Claude CLI if installed');
   }
+  // Re-detect lean binary whenever settings change (user may have updated leanPath)
+  if (config?.lean?.binaryPath !== undefined) {
+    leanRunner.detect(config.lean.binaryPath || undefined);
+  }
 });
 
 ipcMain.handle('copilot:submit-proof', async (_event, marker) => {
@@ -372,6 +380,30 @@ ipcMain.handle('synctex:forward', async (_event, { synctexPath, texPath, line })
 
 ipcMain.handle('synctex:inverse', async (_event, { synctexPath, page, x, y }) => {
   return synctexBridge.inverseSearch(synctexPath, page, x, y);
+});
+
+// ─── Lean 4 Verification ───────────────────────────────────────────
+
+// Return current lean binary info (available, path, version).
+// Pass an optional override path (from settings) to re-detect.
+ipcMain.handle('lean:get-path', async (_event, overridePath) => {
+  return leanRunner.detect(overridePath || undefined);
+});
+
+// Run lean on a Lean 4 source snippet.
+// Streams output lines back via 'lean:output' events; returns final result.
+ipcMain.handle('lean:verify', async (event, { source, taskId }) => {
+  const onLine = (line) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('lean:output', { taskId, line });
+    }
+  };
+  try {
+    const result = await leanRunner.verify(source, onLine);
+    return { taskId, ...result };
+  } catch (err) {
+    return { taskId, success: false, errors: [{ line: 0, col: 0, severity: 'error', message: err.message }], rawOutput: '' };
+  }
 });
 
 // ─── Theory Outline ────────────────────────────────────────────────

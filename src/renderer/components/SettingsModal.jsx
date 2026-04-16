@@ -10,7 +10,13 @@ export default function SettingsModal({ onClose }) {
     texEngine: 'tectonic',
     maxConcurrent: 3,
     autoInlineEasy: true,
+    // Lean 4
+    verificationMode: 'off',   // 'off' | 'lean'
+    leanBinaryPath: '',        // empty → auto-detect
+    leanMaxRetries: 3,
   });
+  const [leanDetect, setLeanDetect] = useState(null); // { available, path, version } | null
+  const [leanTesting, setLeanTesting] = useState(false);
 
   // Load current engine from main process on mount
   useEffect(() => {
@@ -27,6 +33,18 @@ export default function SettingsModal({ onClose }) {
 
   const update = (key, value) => setSettings(prev => ({ ...prev, [key]: value }));
 
+  const handleTestLean = async () => {
+    setLeanTesting(true);
+    try {
+      const result = await window.api?.lean?.getPath(settings.leanBinaryPath || undefined);
+      setLeanDetect(result || { available: false, path: null, version: null });
+    } catch (e) {
+      setLeanDetect({ available: false, path: null, version: e.message });
+    } finally {
+      setLeanTesting(false);
+    }
+  };
+
   const handleSave = async () => {
     if (window.api) {
       // Save copilot config
@@ -37,6 +55,11 @@ export default function SettingsModal({ onClose }) {
         },
         maxConcurrent: settings.maxConcurrent,
         autoInlineDifficulty: settings.autoInlineEasy ? ['Easy'] : [],
+        verificationMode: settings.verificationMode,
+        lean: {
+          binaryPath: settings.leanBinaryPath,
+          maxRetries: settings.leanMaxRetries,
+        },
       });
 
       // Save TeX engine
@@ -92,6 +115,76 @@ export default function SettingsModal({ onClose }) {
           />
           Auto-inline Easy proofs (skip review)
         </label>
+
+        {/* ── Lean Verification ─────────────────────────────────────── */}
+        <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+          <div style={{ fontWeight: 600, fontSize: 12, color: 'var(--text-primary)', marginBottom: 12 }}>
+            Lean 4 Verification
+          </div>
+
+          <label>Mode</label>
+          <select
+            value={settings.verificationMode}
+            onChange={e => update('verificationMode', e.target.value)}
+          >
+            <option value="off">Off (LaTeX proof only)</option>
+            <option value="lean">Lean 4 — verify generated proof</option>
+          </select>
+
+          {settings.verificationMode === 'lean' && (
+            <>
+              <label style={{ marginTop: 12 }}>
+                lean binary path
+                <span style={{ fontWeight: 400, color: 'var(--text-muted)', marginLeft: 6 }}>
+                  (empty = auto-detect from PATH / ~/.elan/bin/lean)
+                </span>
+              </label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  value={settings.leanBinaryPath}
+                  onChange={e => { update('leanBinaryPath', e.target.value); setLeanDetect(null); }}
+                  placeholder="~/.elan/bin/lean"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  onClick={handleTestLean}
+                  disabled={leanTesting}
+                  style={{ background: 'var(--bg-hover)', border: '1px solid var(--border)', color: 'var(--text-secondary)', padding: '4px 10px', borderRadius: 3, cursor: 'pointer', fontSize: 11, flexShrink: 0 }}
+                >
+                  {leanTesting ? 'Testing…' : 'Test'}
+                </button>
+              </div>
+
+              {leanDetect && (
+                <div style={{
+                  marginTop: 6, padding: '6px 10px', borderRadius: 3, fontSize: 11,
+                  background: leanDetect.available ? 'rgba(80,160,120,0.12)' : 'rgba(200,80,60,0.1)',
+                  color: leanDetect.available ? 'var(--verdigris)' : 'var(--vermillion)',
+                  fontFamily: 'var(--font-mono)',
+                }}>
+                  {leanDetect.available
+                    ? `✓ ${leanDetect.version}  (${leanDetect.path})`
+                    : `✗ Not found${leanDetect.version ? ': ' + leanDetect.version : ''}`
+                  }
+                </div>
+              )}
+
+              <label style={{ marginTop: 12 }}>Max retries on lean failure</label>
+              <input
+                type="number" min={1} max={10}
+                value={settings.leanMaxRetries}
+                onChange={e => update('leanMaxRetries', parseInt(e.target.value))}
+              />
+
+              <div style={{ marginTop: 10, padding: '8px 10px', background: 'var(--bg-hover)', borderRadius: 3, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
+                <strong>Note:</strong> Lean verification uses <code>lean</code> core only (no Mathlib).
+                Most basic proofs work without Mathlib.
+                Mathlib support (~15 GB) is not yet available in this version.
+              </div>
+            </>
+          )}
+        </div>
 
         <div className="modal-actions">
           <button onClick={onClose} style={{ background: 'var(--bg-hover)', color: 'var(--text-primary)' }}>

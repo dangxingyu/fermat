@@ -120,8 +120,9 @@ class ClaudeCodeBackend {
    *
    * @param {string} texContent  — full document content
    * @param {object} marker      — { id, difficulty, label, lineNumber, ... }
-   * @param {object} options     — { apiKey, model, skipVerify, onStream }
-   * @returns {object} { proof, verdict?, sketch? }
+   * @param {object} options     — { apiKey, model, skipVerify, onStream, onStatus,
+   *                                  verificationMode, leanRunner, maxLeanRetries }
+   * @returns {object} { proof, verdict?, sketch?, leanCode?, leanVerified?, leanLog? }
    */
   async prove(texContent, marker, options = {}) {
     console.log(`[Prove] Starting proof for marker "${marker.label || marker.id}" (line ${marker.lineNumber || '?'})`);
@@ -144,11 +145,169 @@ class ClaudeCodeBackend {
     const path = this._hasClaudeCli ? 'Claude CLI' : 'direct API';
     console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${path} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length}`);
 
+    let results;
     if (this._hasClaudeCli) {
-      return this._proveWithClaudeCode(contextPrompt, difficulty, targetNode, options);
+      results = await this._proveWithClaudeCode(contextPrompt, difficulty, targetNode, options);
     } else {
-      return this._proveWithDirectApi(contextPrompt, difficulty, targetNode, options);
+      results = await this._proveWithDirectApi(contextPrompt, difficulty, targetNode, options);
     }
+
+    // ── Optional Lean verification pass ──────────────────────────────────────
+    if (options.verificationMode === 'lean' && options.leanRunner?.isAvailable) {
+      results = await this._leanVerifyLoop(results, contextPrompt, targetNode, options);
+    }
+
+    return results;
+  }
+
+  /**
+   * Generate Lean 4 code for the proof and run lean on it, retrying on
+   * failure up to options.maxLeanRetries times (default 3).
+   *
+   * Streams status events via options.onStatus:
+   *   { phase: 'generating-lean' | 'verifying' | 'lean-retry' | 'lean-verified' | 'lean-failed',
+   *     attempt, maxAttempts }
+   */
+  async _leanVerifyLoop(results, contextPrompt, targetNode, options) {
+    const { onStream, onStatus, leanRunner, apiKey, model } = options;
+    const maxRetries = options.maxLeanRetries ?? 3;
+
+    const emitStatus = (phase, extra = {}) => {
+      if (onStatus) onStatus({ phase, ...extra });
+      console.log(`[LeanVerify] ${phase}`, extra);
+    };
+
+    let leanCode = null;
+    let leanLog = '';
+    let leanErrors = [];
+    let leanVerified = false;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      emitStatus(attempt === 1 ? 'generating-lean' : 'lean-retry', { attempt, maxAttempts: maxRetries });
+
+      // ── Step 1: ask Claude to generate Lean 4 code ────────────────────
+      const leanGenPrompt = this._buildLeanGenPrompt(contextPrompt, results.proof, leanCode, leanErrors, attempt);
+
+      try {
+        if (this._hasClaudeCli) {
+          leanCode = await this._runClaude(leanGenPrompt, onStream);
+        } else {
+          const Anthropic = require('@anthropic-ai/sdk');
+          const client = new Anthropic({ apiKey });
+          const modelId = model || 'claude-sonnet-4-6';
+          let text = '';
+          const stream = await client.messages.stream({
+            model: modelId, max_tokens: 4096,
+            system: 'You are a Lean 4 proof assistant. Output only valid Lean 4 code, no prose.',
+            messages: [{ role: 'user', content: leanGenPrompt }],
+          });
+          for await (const ev of stream) {
+            if (ev.type === 'content_block_delta' && ev.delta?.text) {
+              text += ev.delta.text;
+              if (onStream) onStream(ev.delta.text);
+            }
+          }
+          leanCode = text;
+        }
+      } catch (err) {
+        console.error('[LeanVerify] Lean code generation failed:', err.message);
+        break;
+      }
+
+      // Extract ```lean4 ... ``` block if present
+      leanCode = this._extractLeanBlock(leanCode);
+
+      // ── Step 2: run lean on it ─────────────────────────────────────────
+      emitStatus('verifying', { attempt, maxAttempts: maxRetries });
+      leanLog = '';
+      leanErrors = [];
+
+      try {
+        const result = await leanRunner.verify(
+          leanCode,
+          (line) => {
+            leanLog += line + '\n';
+            if (onStream) onStream(`[lean] ${line}`);
+          },
+        );
+
+        leanErrors = result.errors.filter(e => e.severity === 'error');
+
+        if (result.success) {
+          leanVerified = true;
+          emitStatus('lean-verified', { attempt, maxAttempts: maxRetries });
+          break;
+        }
+
+        console.log(`[LeanVerify] Attempt ${attempt} failed (${leanErrors.length} errors)`);
+      } catch (err) {
+        console.error('[LeanVerify] lean runner threw:', err.message);
+        leanErrors = [{ line: 0, col: 0, severity: 'error', message: err.message }];
+      }
+    }
+
+    if (!leanVerified) {
+      emitStatus('lean-failed', { maxAttempts: maxRetries, errorCount: leanErrors.length });
+    }
+
+    return {
+      ...results,
+      leanCode: leanCode || null,
+      leanVerified,
+      leanLog: leanLog.trim(),
+      leanErrors,
+    };
+  }
+
+  /**
+   * Build the prompt that asks Claude to produce Lean 4 code.
+   * On retry, appends the previous errors so Claude can self-correct.
+   */
+  _buildLeanGenPrompt(contextPrompt, latexProof, prevLeanCode, prevErrors, attempt) {
+    const header = attempt === 1
+      ? `Given the following mathematical theorem and its LaTeX proof, write a complete, compilable Lean 4 proof.
+
+Rules:
+- Output ONLY a Lean 4 code block (no prose, no markdown outside the code block).
+- Start with any necessary imports (e.g. \`import Std\`).
+- Define or use a namespace if needed.
+- Do NOT use \`sorry\`.
+- The theorem statement must match the LaTeX statement semantically.
+
+${contextPrompt}
+
+LaTeX proof to formalise:
+${latexProof}`
+      : `Your previous Lean 4 proof attempt had errors. Fix them and output a corrected, complete Lean 4 proof.
+
+Original context:
+${contextPrompt}
+
+Previous Lean code:
+\`\`\`lean4
+${prevLeanCode}
+\`\`\`
+
+Lean errors:
+${prevErrors.map(e => `  line ${e.line}: ${e.message}`).join('\n')}
+
+Output ONLY the corrected Lean 4 code block.`;
+
+    return header;
+  }
+
+  /**
+   * Extract the first ```lean4 ... ``` (or ```lean ...) block from a string.
+   * Falls back to the full string if no fence is found.
+   */
+  _extractLeanBlock(text) {
+    if (!text) return '';
+    const m = text.match(/```(?:lean4?)\n([\s\S]*?)```/);
+    if (m) return m[1].trim();
+    // Sometimes the model outputs a plain ``` block
+    const m2 = text.match(/```\n([\s\S]*?)```/);
+    if (m2) return m2[1].trim();
+    return text.trim();
   }
 
   /**
