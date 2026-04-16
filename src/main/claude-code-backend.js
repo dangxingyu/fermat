@@ -150,21 +150,93 @@ class ClaudeCodeBackend {
 
     // 4. Choose workflow based on difficulty
     const difficulty = targetNode.proveItMarker?.difficulty || 'Medium';
-    const path = this._hasClaudeCli ? 'Claude CLI' : 'direct API';
-    console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${path} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length}`);
+    const whichPath = this._hasClaudeCli ? 'Claude CLI' : 'direct API';
+    console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${whichPath} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length}`);
 
+    // Q-01: single three-phase pipeline for both CLI and direct-API paths.
+    // _callLlm handles the CLI-vs-API divergence internally (system prompt
+    // concatenation vs native system message).
     let results;
-    if (this._hasClaudeCli) {
-      results = await this._proveWithClaudeCode(contextPrompt, difficulty, targetNode, options);
-    } else {
-      results = await this._proveWithDirectApi(contextPrompt, difficulty, targetNode, options);
+    if (!this._hasClaudeCli && !options.apiKey) {
+      const err = new Error('No API key configured and Claude Code CLI not available.');
+      throw classifyAndAnnotateError(err);
     }
+    results = await this._proveThreePhase(contextPrompt, difficulty, targetNode, options);
 
     // ── Optional Lean verification pass ──────────────────────────────────────
     if (options.verificationMode === 'lean' && options.leanRunner?.isAvailable) {
       results = await this._leanSketchFillVerify(results, contextPrompt, targetNode, options);
     }
 
+    return results;
+  }
+
+  /**
+   * Unified three-phase prove pipeline (Q-01).
+   *
+   * Replaces the previous _proveWithClaudeCode / _proveWithDirectApi split —
+   * both paths now flow through _callLlm, which internally dispatches to
+   * `claude --print` (CLI) or the Anthropic SDK's streaming API.
+   *
+   * Phases:
+   *   1. Sketch (Medium/Hard only) — fermat-sketch skill elaborates user hints
+   *   2. Prove — fermat-prove skill writes the proof
+   *   3. Verify (unless skipVerify) — fermat-verify skill judges the proof,
+   *      with one self-correction retry on FAIL / NEEDS_REVISION
+   */
+  async _proveThreePhase(contextPrompt, difficulty, targetNode, options) {
+    const { onStream, apiKey, model, signal } = options;
+    const results = {};
+
+    // Phase 1: Sketch (Medium / Hard)
+    if (difficulty !== 'Easy') {
+      console.log(`[Prove] Phase 1/3: sketch (fermat-sketch skill)`);
+      const sketchSkill = this._loadSkill('fermat-sketch');
+      const t0 = Date.now();
+      results.sketch = await this._callLlm(contextPrompt, onStream, apiKey, model, sketchSkill, signal);
+      console.log(`[Prove] Sketch done (${Date.now() - t0}ms, ${results.sketch.length}ch)`);
+    }
+
+    // Phase 2: Prove
+    console.log(`[Prove] Phase ${difficulty === 'Easy' ? '1/1' : '2/3'}: prove (fermat-prove skill)`);
+    const proveSkill = this._loadSkill('fermat-prove');
+    let proveInput = contextPrompt;
+    if (results.sketch) {
+      proveInput += `\n\n<proof_sketch>\n${results.sketch}\n</proof_sketch>`;
+    }
+    const tp0 = Date.now();
+    let proofOutput = await this._callLlm(proveInput, onStream, apiKey, model, proveSkill, signal);
+    console.log(`[Prove] Proof draft done (${Date.now() - tp0}ms, ${proofOutput.length}ch)`);
+
+    // Phase 3: Verify (+ single self-correction on failure)
+    if (!options.skipVerify) {
+      console.log(`[Prove] Phase 3/3: verify (fermat-verify skill)`);
+      const verifySkill = this._loadSkill('fermat-verify');
+      const verifyInput = `${contextPrompt}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
+      const tv0 = Date.now();
+      results.verdict = await this._callLlm(verifyInput, onStream, apiKey, model, verifySkill, signal);
+      const verdictTag = results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown';
+      console.log(`[Prove] Verdict: ${verdictTag} (${Date.now() - tv0}ms)`);
+
+      const needsRetry = results.verdict &&
+        (results.verdict.includes('<verdict>FAIL') || results.verdict.includes('<verdict>NEEDS_REVISION'));
+      if (needsRetry) {
+        console.log(`[Prove] Verification failed — retrying with feedback`);
+        const retryInput =
+          `${contextPrompt}\n\n<previous_attempt>\n${proofOutput}\n</previous_attempt>\n\n` +
+          `<verification_feedback>\n${results.verdict}\n</verification_feedback>\n\n` +
+          `The previous proof attempt FAILED verification. Please write a corrected proof addressing the issues identified above.`;
+        proofOutput = await this._callLlm(retryInput, onStream, apiKey, model, proveSkill, signal);
+
+        const reVerifyInput = `${contextPrompt}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
+        results.verdict = await this._callLlm(reVerifyInput, onStream, apiKey, model, verifySkill, signal);
+        console.log(`[Prove] Re-verify verdict: ${results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown'}`);
+      }
+    } else {
+      console.log(`[Prove] Verification skipped`);
+    }
+
+    results.proof = this._extractProof(proofOutput);
     return results;
   }
 
@@ -584,19 +656,13 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
   }
 
   /**
-   * Prove using Claude Code CLI with skills.
+   * @deprecated kept for test-script compatibility; new code should go through
+   * `prove()` which calls `_proveThreePhase()`.
    */
   async _proveWithClaudeCode(contextPrompt, difficulty, targetNode, options) {
     const { onStream } = options;
     const results = {};
 
-    // For Medium/Hard: always run fermat-sketch.
-    //   - No user sketch:   sketch from scratch
-    //   - With user sketch: elaborate it (user sketches are often vague or
-    //                        partial; sketch skill fills in details, surfaces
-    //                        hidden prerequisites, and extends to uncovered
-    //                        sub-claims).
-    // The user sketch is already embedded in contextPrompt via <user_sketch>.
     if (difficulty !== 'Easy') {
       console.log(`[Prove] Phase 1/3: sketch (fermat-sketch skill)`);
       const sketchSkill = this._loadSkill('fermat-sketch');
@@ -897,18 +963,46 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
 
   /**
    * Extract \begin{proof}...\end{proof} from model output.
-   * Falls back to the full output if no proof environment is found.
+   * B-12: previously this unconditionally wrapped any non-proof output in a
+   * proof env, so refusals / explanations / Lean blocks were silently inserted
+   * into the document as "proof" content. Now we only wrap output that
+   * actually looks like a LaTeX proof; otherwise we return a commented-out
+   * placeholder the user will see as a visible failure signal rather than
+   * gibberish in the PDF.
    */
   _extractProof(text) {
     if (!text) return '';
     const match = text.match(/\\begin\{proof\}[\s\S]*?\\end\{proof\}/);
     if (match) return match[0];
-    // If output doesn't have proof env, wrap it
+
     const trimmed = text.trim();
-    if (!trimmed.startsWith('\\begin{proof}')) {
+    if (trimmed.startsWith('\\begin{proof}')) return trimmed;
+
+    if (this._looksLikeProofBody(trimmed)) {
       return `\\begin{proof}\n${trimmed}\n\\end{proof}`;
     }
-    return trimmed;
+
+    console.warn('[Prove] Model did not return a LaTeX proof; surfacing as placeholder');
+    const preview = trimmed.replace(/\n/g, ' ').slice(0, 160);
+    return `% [FERMAT] The model did not produce a LaTeX proof.\n% Preview: ${preview}${preview.length >= 160 ? '…' : ''}\n\\begin{proof}\n  % TODO: model output was not a proof — inspect the model response and retry.\n\\end{proof}`;
+  }
+
+  /**
+   * Heuristic — does `text` look like LaTeX proof content (not a refusal, a
+   * JSON blob, a Lean file, or prose)? Used by _extractProof (B-12).
+   */
+  _looksLikeProofBody(text) {
+    if (!text) return false;
+    // Refusal/explanation heuristics
+    if (/\b(I cannot|I can't|I'm sorry|I apologize|As an AI)\b/i.test(text)) return false;
+    // Lean / code-block leak
+    if (/^```/m.test(text) || /\btheorem\s+\w+\s*:/.test(text) || /:=\s*by\b/.test(text)) return false;
+    // Positive LaTeX signals: a backslash macro, math mode, or structural cue
+    if (/\\(begin|end|QED|qed|square|blacksquare|textit|emph|cite|ref)\b/.test(text)) return true;
+    if (/\$[^$]*\$/.test(text)) return true;
+    if (/\\\\/.test(text)) return true;
+    // Standalone prose with no TeX at all — probably an explanation, not a proof
+    return false;
   }
 
   /**

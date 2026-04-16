@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
     setDirty: (dirty) => ipcRenderer.send('window:set-dirty', dirty),
     // Skip the dirty check and destroy the window (used after "save and close").
     forceClose: () => ipcRenderer.send('window:force-close'),
+    // Async "discard unsaved changes?" dialog (U-03: replaces window.confirm).
+    confirmDiscard: () => ipcRenderer.invoke('window:confirm-discard'),
     // Subscribe to menu-triggered file commands.
     onMenuNew:         (cb) => { const h = () => cb(); ipcRenderer.on('menu:new',           h); return () => ipcRenderer.removeListener('menu:new',           h); },
     onMenuOpen:        (cb) => { const h = () => cb(); ipcRenderer.on('menu:open',          h); return () => ipcRenderer.removeListener('menu:open',          h); },

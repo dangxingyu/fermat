@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
 /**
  * Proof Review Panel — shows AI-generated proofs for Medium/Hard markers.
@@ -36,6 +36,26 @@ export default function ProofReviewPanel({ reviews, onAccept, onReject }) {
 function ProofCard({ review, onAccept, onReject }) {
   const [editing, setEditing] = useState(false);
   const [editedProof, setEditedProof] = useState(review.proof);
+  // B-13: when the same card is re-rendered with a new `review.proof`
+  // (e.g. after a resubmit), useState's initialiser doesn't re-run, so the
+  // edited buffer gets stuck on the stale value. Sync the buffer when the
+  // incoming proof changes AND the user isn't in the middle of an edit.
+  useEffect(() => {
+    if (!editing) setEditedProof(review.proof);
+  }, [review.taskId, review.proof, editing]);
+
+  // Copy the currently displayed proof to clipboard (U-06)
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    const text = editing ? editedProof : review.proof;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.warn('[ProofCard] Copy failed:', err?.message);
+    }
+  };
 
   const handleAccept = () => {
     onAccept(review.taskId, editing ? editedProof : review.proof);
@@ -82,6 +102,9 @@ function ProofCard({ review, onAccept, onReject }) {
         </button>
         <button className="btn-edit" onClick={() => setEditing(!editing)}>
           {editing ? 'Preview' : 'Edit'}
+        </button>
+        <button className="btn-copy" onClick={handleCopy} title="Copy proof to clipboard">
+          {copied ? 'Copied ✓' : 'Copy'}
         </button>
         <button className="btn-reject" onClick={() => onReject(review.taskId)}>
           Reject

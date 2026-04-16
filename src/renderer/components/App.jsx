@@ -161,6 +161,9 @@ export default function App() {
   const [showPdf, setShowPdf] = useState(true);
   const [showReviewPanel, setShowReviewPanel] = useState(true);
   const [showLog, setShowLog] = useState(false);
+  // U-02: loading state while opening a file / folder — disables file menu
+  // actions and lets the UI show a spinner instead of appearing frozen.
+  const [fileLoading, setFileLoading] = useState(false);
   const editorRef = useRef(null);
   const editorAreaRef = useRef(null);
   // Bridges ordering: useCopilot needs the callback; it's defined below.
@@ -173,9 +176,14 @@ export default function App() {
   }, []);
 
   // ─── Confirm before discarding unsaved changes ───────────────────────
-  // Uses the browser's synchronous confirm() which Electron honours.
-  const confirmDiscard = useCallback(() => {
+  // U-03: use the main-process native dialog via IPC so we don't block the
+  // renderer's event loop with window.confirm(). Falls back to window.confirm
+  // in the unlikely case the IPC bridge isn't wired (e.g. dev refresh).
+  const confirmDiscard = useCallback(async () => {
     if (!isDirty) return true;
+    if (window.api?.window?.confirmDiscard) {
+      return await window.api.window.confirmDiscard();
+    }
     return window.confirm('You have unsaved changes. Discard them and continue?');
   }, [isDirty]);
 
@@ -290,39 +298,54 @@ export default function App() {
 
   const handleOpen = useCallback(async () => {
     if (!window.api) return;
-    if (!confirmDiscard()) return;
-    const result = await window.api.file.open();
-    if (result) {
-      setContent(result.content);
-      setFilePath(result.filePath);
-      setIsDirty(false);
+    if (!(await confirmDiscard())) return;
+    setFileLoading(true);
+    try {
+      const result = await window.api.file.open();
+      if (result) {
+        setContent(result.content);
+        setFilePath(result.filePath);
+        setIsDirty(false);
+      }
+    } finally {
+      setFileLoading(false);
     }
   }, [confirmDiscard]);
 
   const handleOpenFolder = useCallback(async () => {
     if (!window.api) return;
-    if (!confirmDiscard()) return;
-    const result = await window.api.file.openFolder();
-    if (!result) return;
-    setFolderPath(result.folderPath);
-    setFolderFiles(result.files || []);
-    // Auto-open main.tex or the first .tex file if present
-    const firstTex = (result.files || []).find(f => /\.tex$/i.test(f.name));
-    if (firstTex) {
-      const fileContent = await window.api.file.read(firstTex.path);
-      setContent(fileContent);
-      setFilePath(firstTex.path);
-      setIsDirty(false);
+    if (!(await confirmDiscard())) return;
+    setFileLoading(true);
+    try {
+      const result = await window.api.file.openFolder();
+      if (!result) return;
+      setFolderPath(result.folderPath);
+      setFolderFiles(result.files || []);
+      // Auto-open main.tex or the first .tex file if present
+      const firstTex = (result.files || []).find(f => /\.tex$/i.test(f.name));
+      if (firstTex) {
+        const fileContent = await window.api.file.read(firstTex.path);
+        setContent(fileContent);
+        setFilePath(firstTex.path);
+        setIsDirty(false);
+      }
+    } finally {
+      setFileLoading(false);
     }
   }, [confirmDiscard]);
 
   const handleSelectFile = useCallback(async (file) => {
     if (!window.api) return;
-    if (!confirmDiscard()) return;
-    const fileContent = await window.api.file.read(file.path);
-    setContent(fileContent);
-    setFilePath(file.path);
-    setIsDirty(false);
+    if (!(await confirmDiscard())) return;
+    setFileLoading(true);
+    try {
+      const fileContent = await window.api.file.read(file.path);
+      setContent(fileContent);
+      setFilePath(file.path);
+      setIsDirty(false);
+    } finally {
+      setFileLoading(false);
+    }
   }, [confirmDiscard]);
 
   const handleSave = useCallback(async () => {
@@ -345,8 +368,8 @@ export default function App() {
     return savedPath;
   }, [filePath, content]);
 
-  const handleNew = useCallback(() => {
-    if (!confirmDiscard()) return;
+  const handleNew = useCallback(async () => {
+    if (!(await confirmDiscard())) return;
     setContent('');
     setFilePath(null);
     setFolderPath(null);
@@ -424,21 +447,43 @@ export default function App() {
   // Also strips any subsequent `% SKETCH:` continuation lines so the user's
   // hint comments don't linger below the inserted proof. Uses functional
   // setContent so it works correctly from IPC callbacks (no stale closure).
+  //
+  // U-05: search outward from the stored lineNumber in both directions
+  // (±200 lines, then full-scan fallback) so proofs still land correctly
+  // when the user has edited the document between submit and completion.
   const insertProofAtMarker = useCallback((marker, proof) => {
     if (!marker || !proof) return;
     const lineNum = marker.lineNumber;
     setContent(prev => {
       const lines = prev.split('\n');
-      for (let i = lineNum - 1; i < Math.min(lineNum + 40, lines.length); i++) {
-        if (lines[i]?.includes('[PROVE IT:')) {
-          lines[i] = proof;
-          // Consume contiguous SKETCH comment block below (if any)
-          let j = i + 1;
-          while (j < lines.length && /^\s*%\s*(SKETCH:|\s{2,})/.test(lines[j])) j++;
-          if (j > i + 1) lines.splice(i + 1, j - (i + 1));
-          return lines.join('\n');
-        }
+      const tryReplaceAt = (i) => {
+        if (i < 0 || i >= lines.length) return false;
+        if (!lines[i]?.includes('[PROVE IT:')) return false;
+        lines[i] = proof;
+        let j = i + 1;
+        while (j < lines.length && /^\s*%\s*(SKETCH:|\s{2,})/.test(lines[j])) j++;
+        if (j > i + 1) lines.splice(i + 1, j - (i + 1));
+        return true;
+      };
+
+      // Pass 1: expanding search centred on the stored line (±200)
+      for (let d = 0; d <= 200; d++) {
+        if (tryReplaceAt((lineNum - 1) + d)) return lines.join('\n');
+        if (d > 0 && tryReplaceAt((lineNum - 1) - d)) return lines.join('\n');
       }
+
+      // Pass 2: full-document scan as a last resort — prefer the marker that
+      // matches the stored difficulty label if we have one.
+      const wantedDiff = marker.difficulty;
+      let fallbackIdx = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (!lines[i].includes('[PROVE IT:')) continue;
+        if (wantedDiff && lines[i].includes(wantedDiff)) { fallbackIdx = i; break; }
+        if (fallbackIdx < 0) fallbackIdx = i;
+      }
+      if (fallbackIdx >= 0 && tryReplaceAt(fallbackIdx)) return lines.join('\n');
+
+      console.warn(`[insertProofAtMarker] No [PROVE IT:] marker found for "${marker.label}" (stored line ${lineNum})`);
       return prev;
     });
   }, []);
@@ -721,6 +766,25 @@ export default function App() {
 
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} />
+      )}
+
+      {/* ── File loading overlay (U-02) ───────────────────────────────── */}
+      {fileLoading && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 10001, pointerEvents: 'auto',
+          fontFamily: 'var(--font-display)', fontStyle: 'italic',
+          color: 'var(--text-primary)', fontSize: 13,
+        }}>
+          <div style={{
+            padding: '16px 24px', borderRadius: 4,
+            background: 'var(--bg-surface)', border: '1px solid var(--border-strong)',
+            boxShadow: 'var(--shadow-md)',
+          }}>
+            Loading…
+          </div>
+        </div>
       )}
 
       {/* ── Update notification banner ───────────────────────────────── */}

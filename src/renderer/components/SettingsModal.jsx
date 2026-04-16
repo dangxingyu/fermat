@@ -55,6 +55,15 @@ export default function SettingsModal({ onClose }) {
 
   const update = (key, value) => setSettings(prev => ({ ...prev, [key]: value }));
 
+  // B-11: numeric inputs must never store NaN — an empty/invalid input should
+  // fall back to a safe minimum (1). parseInt('') === NaN and would otherwise
+  // disable the copilot queue (while-loop `running < NaN` is always false).
+  const updateInt = (key, raw, min = 1, max = 10) => {
+    const n = parseInt(raw, 10);
+    const safe = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : min;
+    setSettings(prev => ({ ...prev, [key]: safe }));
+  };
+
   const handleTestLean = async () => {
     setLeanTesting(true);
     try {
@@ -127,7 +136,7 @@ export default function SettingsModal({ onClose }) {
           min={1}
           max={10}
           value={settings.maxConcurrent}
-          onChange={e => update('maxConcurrent', parseInt(e.target.value))}
+          onChange={e => updateInt('maxConcurrent', e.target.value, 1, 10)}
         />
 
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
@@ -197,7 +206,7 @@ export default function SettingsModal({ onClose }) {
               <input
                 type="number" min={1} max={10}
                 value={settings.leanMaxRetries}
-                onChange={e => update('leanMaxRetries', parseInt(e.target.value))}
+                onChange={e => updateInt('leanMaxRetries', e.target.value, 1, 10)}
               />
 
               <label style={{ marginTop: 12, display: 'flex', alignItems: 'flex-start', gap: 8 }}>

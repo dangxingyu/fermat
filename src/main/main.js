@@ -41,10 +41,23 @@ if (app.isPackaged) {
 }
 
 let mainWindow;
+// Q-03: engines are singletons created at module load, not inside createWindow.
+// macOS re-activate (`activate` event) opens a fresh window but keeps these
+// alive so queued tasks and accepted-proof memory survive across window churn.
 let copilotEngine;
 let texCompiler;
 let synctexBridge;
 let leanRunner;
+
+function ensureEngines() {
+  if (leanRunner)  return;
+  leanRunner    = new LeanRunner();
+  leanRunner.detect();
+  // Q-02: share one LeanRunner across IPC + the copilot engine
+  copilotEngine = new FermatEngine({ leanRunner });
+  texCompiler   = new TexCompiler();
+  synctexBridge = new SynctexBridge();
+}
 
 // Renderer reports its dirty state here so the close handler can decide.
 let isDirtyInRenderer = false;
@@ -117,12 +130,8 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../../dist/index.html'));
   }
 
-  // Initialize engines
-  copilotEngine = new FermatEngine();
-  texCompiler = new TexCompiler();
-  synctexBridge = new SynctexBridge();
-  leanRunner = new LeanRunner();
-  leanRunner.detect(); // auto-detect on startup; re-detected when settings change
+  // Engines are created once (Q-03). On macOS re-activate we reuse them.
+  ensureEngines();
 
   // ─── Restore persisted settings ───────────────────────────────────────
   // Apply stored copilot / tex / lean config before the renderer mounts, so
@@ -550,6 +559,20 @@ ipcMain.on('window:set-dirty', (_event, dirty) => {
   isDirtyInRenderer = !!dirty;
 });
 
+// U-03: async confirmation dialog — replaces window.confirm() which blocks
+// the renderer event loop.
+ipcMain.handle('window:confirm-discard', async () => {
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Discard', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    message: 'You have unsaved changes.',
+    detail: 'Discard them and continue?',
+  });
+  return response === 0; // true = discard, false = cancel
+});
+
 // Renderer calls this after a successful "save and close" sequence to
 // bypass the dirty check and actually destroy the window.
 ipcMain.on('window:force-close', () => {
@@ -562,7 +585,12 @@ ipcMain.handle('log:get-buffer', async () => logBuffer.slice());
 ipcMain.handle('log:clear', async () => { logBuffer.length = 0; });
 
 // ─── App Lifecycle ─────────────────────────────────────────────────
-app.whenReady().then(createWindow);
+// Engines need electron's `app.getPath` etc., so we wait for app-ready
+// before initialising them — but BEFORE the first window is shown.
+app.whenReady().then(() => {
+  ensureEngines();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

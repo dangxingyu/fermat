@@ -16,9 +16,17 @@
  * the user are stored and can be referenced by subsequent proof tasks.
  */
 
+// P-04: LRU cap on proof memory — prevents context bloat on long sessions.
+// After 40 accepted proofs, older entries are evicted. The prompt already
+// formats only a handful of them per call so the cap is generous; its job
+// is just to keep the Map from growing forever.
+const PROOF_MEMORY_MAX = 40;
+
 class ContextAssembler {
   constructor() {
     // proof memory: label -> { statementTeX, proofTeX, acceptedAt }
+    // Map iteration order is insertion order, so delete+set moves an entry
+    // to the "most recent" end — the standard Map-as-LRU trick.
     this.proofMemory = new Map();
   }
 
@@ -27,11 +35,19 @@ class ContextAssembler {
    * Future proof tasks can reference this as a known result.
    */
   recordAcceptedProof(label, statementTeX, proofTeX) {
+    // LRU: if the label is already present, delete first so set() re-inserts
+    // at the end (most-recent position).
+    if (this.proofMemory.has(label)) this.proofMemory.delete(label);
     this.proofMemory.set(label, {
       statementTeX,
       proofTeX,
       acceptedAt: Date.now(),
     });
+    // Evict oldest entries once we exceed the cap (P-04)
+    while (this.proofMemory.size > PROOF_MEMORY_MAX) {
+      const oldestKey = this.proofMemory.keys().next().value;
+      this.proofMemory.delete(oldestKey);
+    }
   }
 
   /**

@@ -204,41 +204,48 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
   }, [content]);
 
   // ─── Update decorations for [PROVE IT] markers ───
+  // P-05: debounced so we don't re-scan the full document on every keystroke
+  // (was running a regex over every line on every `content` update, which is
+  // O(N) per keystroke for a big document). 300ms debounce is imperceptible
+  // for visual glyph refresh.
   useEffect(() => {
-    const editor = editorInstanceRef.current;
-    if (!editor) return;
+    const timer = setTimeout(() => {
+      const editor = editorInstanceRef.current;
+      if (!editor) return;
 
-    const model = editor.getModel();
-    if (!model) return;
+      const model = editor.getModel();
+      if (!model) return;
 
-    const text = model.getValue();
-    const lines = text.split('\n');
-    const newDecorations = [];
-    const MARKER_REGEX = /\[PROVE\s+IT:\s*(Easy|Medium|Hard)/i;
+      const text = model.getValue();
+      const lines = text.split('\n');
+      const newDecorations = [];
+      const MARKER_REGEX = /\[PROVE\s+IT:\s*(Easy|Medium|Hard)/i;
 
-    lines.forEach((line, idx) => {
-      const match = line.match(MARKER_REGEX);
-      if (match) {
-        const difficulty = match[1];
-        const lineNum = idx + 1;
-        newDecorations.push({
-          range: new monaco.Range(lineNum, 1, lineNum, 1),
-          options: {
-            isWholeLine: true,
-            className: 'prove-it-decoration',
-            glyphMarginClassName: `prove-it-glyph difficulty-${difficulty.toLowerCase()}`,
-            glyphMarginHoverMessage: {
-              value: `**[PROVE IT: ${difficulty}]** — Click "Prove All" or right-click to prove this`,
+      lines.forEach((line, idx) => {
+        const match = line.match(MARKER_REGEX);
+        if (match) {
+          const difficulty = match[1];
+          const lineNum = idx + 1;
+          newDecorations.push({
+            range: new monaco.Range(lineNum, 1, lineNum, 1),
+            options: {
+              isWholeLine: true,
+              className: 'prove-it-decoration',
+              glyphMarginClassName: `prove-it-glyph difficulty-${difficulty.toLowerCase()}`,
+              glyphMarginHoverMessage: {
+                value: `**[PROVE IT: ${difficulty}]** — Click "Prove All" or right-click to prove this`,
+              },
             },
-          },
-        });
-      }
-    });
+          });
+        }
+      });
 
-    decorationsRef.current = editor.deltaDecorations(
-      decorationsRef.current,
-      newDecorations
-    );
+      decorationsRef.current = editor.deltaDecorations(
+        decorationsRef.current,
+        newDecorations,
+      );
+    }, 300);
+    return () => clearTimeout(timer);
   }, [content, proofTasks]);
 
   if (error) {

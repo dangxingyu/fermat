@@ -28,6 +28,11 @@ const path = require('path');
 // Lean error line format:  /path/to/file.lean:LINE:COL: (error|warning|info): MESSAGE
 const LEAN_ERROR_RE = /^(.+?):(\d+):(\d+): (error|warning|info): (.+)$/;
 
+// B-10: default per-verify timeout. Lean tactics like `decide` or `simp` can
+// hang indefinitely on malformed goals; without this a single bad sorry locks
+// one slot of the maxConcurrent pool until the app restarts.
+const DEFAULT_LEAN_TIMEOUT_MS = 120_000;
+
 // Absolute path to the lean-workspace lake project (relative to Fermat repo root).
 // In packaged builds this resolves to resourcesPath/lean-workspace.
 function resolveWorkspacePath() {
@@ -192,7 +197,7 @@ class LeanRunner {
 
   // ─── Core runner ─────────────────────────────────────────────────────────
 
-  _runLean(binary, args, env, cwd, tmpFile, onLine, signal) {
+  _runLean(binary, args, env, cwd, tmpFile, onLine, signal, timeoutMs = DEFAULT_LEAN_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
       const proc = spawn(binary, args, {
         env,
@@ -202,6 +207,18 @@ class LeanRunner {
 
       let rawOutput = '';
       const errors = [];
+      let timedOut = false;
+
+      // B-10: enforce a hard timeout so hung `decide`/`simp` calls release
+      // the concurrency slot instead of locking the pool forever.
+      const timer = timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            console.warn(`[LeanRunner] Timeout (${timeoutMs}ms) — killing lean process`);
+            try { proc.kill('SIGTERM'); } catch {}
+            setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1500);
+          }, timeoutMs)
+        : null;
 
       const handleLine = (line) => {
         rawOutput += line + '\n';
@@ -241,28 +258,42 @@ class LeanRunner {
       });
 
       proc.on('close', (code) => {
+        if (timer) clearTimeout(timer);
         if (outBuf) handleLine(outBuf);
         if (errBuf) handleLine(errBuf);
         // Clean up temp file (ignore errors — file may already be gone)
         try { if (tmpFile) fs.unlinkSync(tmpFile); } catch {}
 
+        if (timedOut) {
+          errors.push({
+            file: tmpFile, line: 0, col: 0, severity: 'error',
+            message: `lean timed out after ${timeoutMs}ms and was killed`,
+          });
+        }
         const realErrors = errors.filter(e => e.severity === 'error');
         resolve({
-          success: code === 0 && realErrors.length === 0,
+          success: !timedOut && code === 0 && realErrors.length === 0,
           exitCode: code,
           errors,
           rawOutput: rawOutput.trim(),
           usedMathlib: this._usesMathlib && this._mathlibReady,
+          timedOut,
         });
       });
 
       proc.on('error', (err) => {
+        if (timer) clearTimeout(timer);
         try { if (tmpFile) fs.unlinkSync(tmpFile); } catch {}
         reject(new Error(`Failed to spawn lean: ${err.message}`));
       });
 
       if (signal) {
-        signal.addEventListener('abort', () => proc.kill('SIGTERM'));
+        const onAbort = () => {
+          try { proc.kill('SIGTERM'); } catch {}
+          setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1500);
+        };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
       }
     });
   }
@@ -301,14 +332,39 @@ class LeanRunner {
 
   /**
    * Check whether the mathlib olean cache has been downloaded.
-   * We look for at least one .olean file in the lake build directory.
+   * B-07: previously only checked the directory existed, which returned true
+   * even for a partial or failed checkout. Now look for at least one .olean
+   * file to confirm the cache is actually built.
    */
   _detectMathlibCache() {
     const cacheDir = path.join(this._workspacePath, '.lake', 'packages', 'mathlib');
-    this._mathlibReady = fs.existsSync(cacheDir);
+    this._mathlibReady = fs.existsSync(cacheDir) && this._hasAnyOlean(cacheDir);
     if (this._mathlibReady) {
       console.log('[LeanRunner] Mathlib workspace detected at', this._workspacePath);
     }
+  }
+
+  /**
+   * Walk `dir` looking for any .olean file. Stops as soon as one is found so
+   * this is cheap even on deep trees. Bounded by `maxEntries` to avoid
+   * walking the entire cache if none are present.
+   */
+  _hasAnyOlean(dir, maxEntries = 5000) {
+    const stack = [dir];
+    let seen = 0;
+    while (stack.length && seen < maxEntries) {
+      const d = stack.pop();
+      let entries;
+      try { entries = fs.readdirSync(d, { withFileTypes: true }); }
+      catch { continue; }
+      for (const e of entries) {
+        seen++;
+        if (seen >= maxEntries) return false;
+        if (e.isFile() && e.name.endsWith('.olean')) return true;
+        if (e.isDirectory()) stack.push(path.join(d, e.name));
+      }
+    }
+    return false;
   }
 
   _which(name) {

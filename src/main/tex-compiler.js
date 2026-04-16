@@ -87,9 +87,24 @@ class TexCompiler {
 
     // ── 2. Replace  % [PROVE IT: X]  with  \fermatprove{X} ─────────────
     //    Preserves SKETCH comments (they stay invisible).
+    // S-04: sanitise the captured difficulty so braces / backslashes in the
+    // marker can't break the \fermatprove{} argument or inject LaTeX macros.
     out = out.replace(
       /^(\s*)%\s*\[PROVE\s+IT:\s*([^\]]+)\]\s*$/gm,
-      '$1\\fermatprove{$2}',
+      (_m, indent, label) => {
+        const safe = String(label)
+          .replace(/\\/g, '\\textbackslash{}')
+          .replace(/[{}]/g, '')
+          .replace(/#/g, '\\#')
+          .replace(/\$/g, '\\$')
+          .replace(/%/g, '\\%')
+          .replace(/&/g, '\\&')
+          .replace(/_/g, '\\_')
+          .replace(/\^/g, '\\^{}')
+          .replace(/~/g, '\\~{}')
+          .trim();
+        return `${indent}\\fermatprove{${safe}}`;
+      },
     );
 
     return out;
@@ -139,10 +154,10 @@ class TexCompiler {
     try {
       const log = await this._runEngine(texPath, workDir, outputDir);
 
-      // Clean up the hidden preprocessed tex in the source dir after compile.
-      if (this._sourceDir && texPath.startsWith(this._sourceDir)) {
-        try { fs.unlinkSync(texPath); } catch {}
-      }
+      // B-05: keep the hidden ".foo.fermat.tex" on disk after compile. The
+      // .synctex.gz has internal references to this path, and the returned
+      // texPath points here; deleting it would make forward search silently
+      // fail every time. The file is overwritten on each compile anyway.
 
       // Rename outputs from ".main.fermat.*" → "main.*" in the source dir
       // so the user sees a clean main.pdf next to main.tex. Also clean up

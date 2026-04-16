@@ -38,7 +38,7 @@ class ProofTask {
 }
 
 class FermatEngine extends EventEmitter {
-  constructor() {
+  constructor(options = {}) {
     super();
     this.config = {
       defaultModel: 'claude',
@@ -55,7 +55,10 @@ class FermatEngine extends EventEmitter {
     this.running = 0;
     this.queue = [];
     this.backend = new ClaudeCodeBackend();
-    this.leanRunner = new LeanRunner();
+    // Q-02: accept an injected LeanRunner instead of spawning a second one.
+    // main.js creates a single LeanRunner for IPC and passes it in here,
+    // so we don't duplicate `which lean` detection or track divergent state.
+    this.leanRunner = options.leanRunner || new LeanRunner();
     // Resolvers for the lean statement review pause point.
     // Maps taskId → resolve fn from the Promise created in _leanSketchFillVerify.
     this._statementReviewResolvers = new Map();
@@ -66,6 +69,16 @@ class FermatEngine extends EventEmitter {
 
   configure(config) {
     Object.assign(this.config, config);
+    // B-11 defence-in-depth: never let NaN or non-finite numerics reach the
+    // queue scheduler (while-loop `running < NaN` is always false, which
+    // silently disables all proofs).
+    if (!Number.isFinite(this.config.maxConcurrent) || this.config.maxConcurrent < 1) {
+      console.warn(`[Copilot] Invalid maxConcurrent=${this.config.maxConcurrent}, clamping to 1`);
+      this.config.maxConcurrent = 1;
+    }
+    if (this.config.lean && !Number.isFinite(this.config.lean.maxRetries)) {
+      this.config.lean.maxRetries = 3;
+    }
     // Re-detect lean binary and mathlib setting when the lean config changes
     if (config?.lean !== undefined || config?.verificationMode) {
       this.leanRunner.detect(this.config.lean?.binaryPath || undefined);

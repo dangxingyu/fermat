@@ -21,14 +21,23 @@ const THEOREM_ENVS = [
   'assumption', 'axiom', 'observation', 'fact',
 ];
 
-const PROVE_IT_REGEX = /\[PROVE\s+IT:\s*(Easy|Medium|Hard)(?:\s*,\s*model\s*=\s*(\w+))?\]/gi;
-const LABEL_REGEX = /\\label\{([^}]+)\}/g;
-const REF_REGEX = /\\(?:ref|eqref|cref|Cref|autoref)\{([^}]+)\}/g;
+// B-08/Q-04: Stateful regexes with the `g` flag are dangerous at module scope —
+// `lastIndex` leaks across calls if any call throws mid-loop. We store the
+// source strings + flags and build fresh RegExp instances inside the parser
+// function, and for iteration we use `matchAll()` (which doesn't mutate the
+// regex's lastIndex) so exception paths can't poison subsequent parses.
+const PROVE_IT_SRC = [String.raw`\[PROVE\s+IT:\s*(Easy|Medium|Hard)(?:\s*,\s*model\s*=\s*(\w+))?\]`, 'gi'];
+const LABEL_SRC    = [String.raw`\\label\{([^}]+)\}`,                                                   'g'];
+const REF_SRC      = [String.raw`\\(?:ref|eqref|cref|Cref|autoref)\{([^}]+)\}`,                         'g'];
 const BEGIN_ENV_REGEX = /\\begin\{(\w+)\}(?:\[([^\]]*)\])?/;
 const END_ENV_REGEX = /\\end\{(\w+)\}/;
 const PROOF_BEGIN = /\\begin\{proof\}/;
 const PROOF_END = /\\end\{proof\}/;
 const SECTION_REGEX = /\\(section|subsection|subsubsection|chapter|part)\*?\{([^}]+)\}/;
+
+const reProveIt = () => new RegExp(PROVE_IT_SRC[0], PROVE_IT_SRC[1]);
+const reLabel   = () => new RegExp(LABEL_SRC[0],    LABEL_SRC[1]);
+const reRef     = () => new RegExp(REF_SRC[0],      REF_SRC[1]);
 
 function parseTheoryOutline(texContent) {
   const lines = texContent.split('\n');
@@ -87,12 +96,10 @@ function parseTheoryOutline(texContent) {
         statementTeX: '',
       };
       nodes.push(node);
-      let lm;
-      while ((lm = LABEL_REGEX.exec(line)) !== null) {
+      for (const lm of line.matchAll(reLabel())) {
         node.labels.push(lm[1]);
         labelToNode[lm[1]] = node.id;
       }
-      LABEL_REGEX.lastIndex = 0;
       continue;
     }
 
@@ -133,28 +140,24 @@ function parseTheoryOutline(texContent) {
 
         // Extract labels from body
         const body = currentNode._bodyLines.join('\n');
-        let lm;
-        while ((lm = LABEL_REGEX.exec(body)) !== null) {
+        for (const lm of body.matchAll(reLabel())) {
           currentNode.labels.push(lm[1]);
           labelToNode[lm[1]] = currentNode.id;
         }
-        LABEL_REGEX.lastIndex = 0;
 
         // Extract refs from body
-        while ((lm = REF_REGEX.exec(body)) !== null) {
+        for (const lm of body.matchAll(reRef())) {
           currentNode.refs.push(lm[1]);
         }
-        REF_REGEX.lastIndex = 0;
 
         // Check for PROVE IT markers in body
-        while ((lm = PROVE_IT_REGEX.exec(body)) !== null) {
+        for (const lm of body.matchAll(reProveIt())) {
           currentNode.proveItMarker = {
             difficulty: lm[1],
             preferredModel: lm[2] || null,
             offset: lm.index,
           };
         }
-        PROVE_IT_REGEX.lastIndex = 0;
 
         // ─── Fallback display name for unnamed nodes ───
         // Many real documents write `\begin{corollary}` without `[Name]`.
@@ -228,8 +231,7 @@ function parseTheoryOutline(texContent) {
 
     // ─── Standalone PROVE IT markers (outside theorem envs) ───
     if (!currentNode) {
-      let pm;
-      while ((pm = PROVE_IT_REGEX.exec(line)) !== null) {
+      for (const pm of line.matchAll(reProveIt())) {
         const lastNode = [...nodes].reverse().find(n => THEOREM_ENVS.includes(n.type));
         if (lastNode && !lastNode.proveItMarker) {
           lastNode.proveItMarker = {
@@ -239,7 +241,6 @@ function parseTheoryOutline(texContent) {
           };
         }
       }
-      PROVE_IT_REGEX.lastIndex = 0;
 
       // ─── User-provided proof sketch ───
       // Format:
@@ -282,8 +283,7 @@ function parseTheoryOutline(texContent) {
 
     // Also check same-line labels outside envs
     if (!currentNode) {
-      let lm;
-      while ((lm = LABEL_REGEX.exec(line)) !== null) {
+      for (const lm of line.matchAll(reLabel())) {
         const lastNode = nodes[nodes.length - 1];
         if (lastNode && !lastNode.labels?.includes(lm[1])) {
           lastNode.labels = lastNode.labels || [];
@@ -291,7 +291,6 @@ function parseTheoryOutline(texContent) {
           labelToNode[lm[1]] = lastNode.id;
         }
       }
-      LABEL_REGEX.lastIndex = 0;
     }
   }
 
