@@ -36,3 +36,7 @@ yarn-error.log*
 # Temp
 *.tmp
 *.temp
+
+# Lean workspace — lake project + mathlib cache (large, not committed)
+lean-workspace/.lake/
+lean-workspace/.elan/

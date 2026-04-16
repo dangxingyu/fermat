@@ -63,9 +63,10 @@ class FermatEngine extends EventEmitter {
 
   configure(config) {
     Object.assign(this.config, config);
-    // Re-detect lean binary when the lean config changes
-    if (config?.lean?.binaryPath !== undefined || config?.verificationMode) {
+    // Re-detect lean binary and mathlib setting when the lean config changes
+    if (config?.lean !== undefined || config?.verificationMode) {
       this.leanRunner.detect(this.config.lean?.binaryPath || undefined);
+      this.leanRunner.setUsesMathlib(this.config.lean?.usesMathlib ?? false);
     }
   }
 

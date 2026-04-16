@@ -3,16 +3,21 @@
  *
  * Manages the local Lean 4 verification environment for Fermat.
  *
- * Responsibilities:
- *   - Locate the lean binary (settings override → PATH → ~/.elan/bin/lean)
- *   - Write generated Lean 4 code to a temp file and run `lean --run` on it
- *   - Stream stdout/stderr back line-by-line via a callback
- *   - Parse error messages into { line, col, message } structs for the frontend
+ * Two verification modes:
  *
- * We intentionally use `lean` directly (not `lake build`) for single-theorem
- * verification — lake requires a full project setup and is much slower to
- * initialise.  For mathlib-dependent proofs the user would need a lake project,
- * which is a separate opt-in workflow.
+ *   1. Core-only (default)
+ *      Writes a temp .lean file to /tmp, runs `lean <file>` directly.
+ *      Fast (~1-3 s), no lake project required, supports Lean core + Std.
+ *
+ *   2. Mathlib mode (usesMathlib: true)
+ *      Writes the temp file into lean-workspace/ (the lake project that has
+ *      mathlib as a dependency), runs `lean <file>` with the lake project's
+ *      .lake/packages available on the path.  Requires lake exe cache get
+ *      to have been run first.
+ *
+ * Error parsing:
+ *   Lean error format:  /path/file.lean:LINE:COL: error: MESSAGE
+ *   Parsed into { file, line, col, severity, message } structs.
  */
 
 const { spawn, execFileSync } = require('child_process');
@@ -20,41 +25,60 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Lean error line format:  /path/to/file.lean:LINE:COL: error: MESSAGE
+// Lean error line format:  /path/to/file.lean:LINE:COL: (error|warning|info): MESSAGE
 const LEAN_ERROR_RE = /^(.+?):(\d+):(\d+): (error|warning|info): (.+)$/;
+
+// Absolute path to the lean-workspace lake project (relative to Fermat repo root).
+// In packaged builds this resolves to resourcesPath/lean-workspace.
+function resolveWorkspacePath() {
+  const { app } = (() => { try { return require('electron'); } catch { return {}; } })();
+  if (app?.isPackaged) {
+    return path.join(process.resourcesPath, 'lean-workspace');
+  }
+  // In dev: two levels up from src/main/ → repo root → lean-workspace
+  return path.join(__dirname, '..', '..', 'lean-workspace');
+}
 
 class LeanRunner {
   constructor() {
-    this._binaryPath = null;
+    this._binaryPath = null;   // lean binary (elan shim or absolute)
     this._available = false;
-    this._workDir = path.join(os.tmpdir(), 'fermat-lean');
-    if (!fs.existsSync(this._workDir)) {
-      fs.mkdirSync(this._workDir, { recursive: true });
+    this._usesMathlib = false;
+
+    // Core-only temp dir
+    this._tmpDir = path.join(os.tmpdir(), 'fermat-lean');
+    if (!fs.existsSync(this._tmpDir)) {
+      fs.mkdirSync(this._tmpDir, { recursive: true });
     }
+
+    // Lake workspace (for mathlib mode)
+    this._workspacePath = resolveWorkspacePath();
+    this._mathlibReady = false;
+    this._detectMathlibCache();
   }
 
   // ─── Binary detection ──────────────────────────────────────────────────────
 
   /**
    * Detect the lean binary.
-   * @param {string} [override] — explicit path from settings (may be empty string)
+   * @param {string} [override] — explicit path from settings (may be empty)
    * @returns {{ available: boolean, path: string|null, version: string|null }}
    */
   detect(override) {
     const candidates = [
-      override,                       // user-specified
-      process.env.LEAN,               // env var
-      this._which('lean'),            // PATH
-      path.join(os.homedir(), '.elan', 'bin', 'lean'),  // default elan location
+      override || null,
+      process.env.LEAN || null,
+      this._which('lean'),
+      path.join(os.homedir(), '.elan', 'bin', 'lean'),
     ].filter(Boolean);
 
     for (const candidate of candidates) {
-      const result = this._tryBinary(candidate);
-      if (result) {
+      const version = this._tryBinary(candidate);
+      if (version) {
         this._binaryPath = candidate;
         this._available = true;
-        console.log(`[LeanRunner] Found lean at ${candidate} (${result})`);
-        return { available: true, path: candidate, version: result };
+        console.log(`[LeanRunner] lean found at ${candidate} (${version.split('\n')[0]})`);
+        return { available: true, path: candidate, version };
       }
     }
 
@@ -64,15 +88,28 @@ class LeanRunner {
     return { available: false, path: null, version: null };
   }
 
-  get isAvailable() { return this._available; }
-  get binaryPath()  { return this._binaryPath; }
+  /**
+   * Set whether to use the mathlib lake workspace for verification.
+   * Call this when the user changes the mathlib setting.
+   */
+  setUsesMathlib(flag) {
+    this._usesMathlib = !!flag;
+    if (flag) this._detectMathlibCache();
+  }
+
+  get isAvailable()    { return this._available; }
+  get binaryPath()     { return this._binaryPath; }
+  get mathlibReady()   { return this._mathlibReady; }
 
   // ─── Verification ─────────────────────────────────────────────────────────
 
   /**
    * Run lean on a snippet of Lean 4 source code.
    *
-   * @param {string} leanSource — complete Lean 4 source (imports + theorem + proof)
+   * When usesMathlib is true and mathlibReady, writes the file inside the
+   * lean-workspace lake project so that `import Mathlib` resolves correctly.
+   *
+   * @param {string} leanSource — complete Lean 4 source
    * @param {function} onLine   — called with each output line as it arrives
    * @param {AbortSignal} [signal] — optional cancellation
    * @returns {Promise<{ success: boolean, errors: LeanError[], rawOutput: string }>}
@@ -81,29 +118,65 @@ class LeanRunner {
     if (!this._available) {
       return Promise.resolve({
         success: false,
-        errors: [{ line: 0, col: 0, severity: 'error', message: 'lean binary not found' }],
+        errors: [{ line: 0, col: 0, severity: 'error', message: 'lean binary not found — check Settings' }],
         rawOutput: '',
       });
     }
 
+    const useMathlib = this._usesMathlib && this._mathlibReady;
+    return useMathlib
+      ? this._verifyWithMathlib(leanSource, onLine, signal)
+      : this._verifyCoreOnly(leanSource, onLine, signal);
+  }
+
+  // ─── Core-only verification ───────────────────────────────────────────────
+
+  _verifyCoreOnly(leanSource, onLine, signal) {
+    const tmpFile = path.join(this._tmpDir, `verify_${Date.now()}.lean`);
+    fs.writeFileSync(tmpFile, leanSource, 'utf-8');
+
+    const env = this._buildEnv();
+    return this._runLean(this._binaryPath, [tmpFile], env, undefined /* cwd */, tmpFile, onLine, signal);
+  }
+
+  // ─── Mathlib verification ─────────────────────────────────────────────────
+  // Uses `lake env lean <file>` so that the lake project injects the correct
+  // LEAN_PATH entries for mathlib into the lean process environment.
+  // The temp file is placed inside the lake project root.
+
+  _verifyWithMathlib(leanSource, onLine, signal) {
+    // Resolve the `lake` binary — it lives next to lean in elan's bin dir.
+    const lakeBin = this._resolveLakeBin();
+    if (!lakeBin) {
+      // Fall back to core-only if lake isn't found
+      console.warn('[LeanRunner] lake not found, falling back to core-only verification');
+      return this._verifyCoreOnly(leanSource, onLine, signal);
+    }
+
+    // Write temp file into the lake project directory.
+    const tmpFile = path.join(this._workspacePath, '_FermatVerify.lean');
+    fs.writeFileSync(tmpFile, leanSource, 'utf-8');
+
+    const env = this._buildEnv();
+    // `lake env lean <file>` — lake sets up LEAN_PATH then execs lean
+    return this._runLean(
+      lakeBin,
+      ['env', 'lean', '_FermatVerify.lean'],
+      env,
+      this._workspacePath,  // cwd must be the lake project root
+      tmpFile,
+      onLine,
+      signal,
+    );
+  }
+
+  // ─── Core runner ─────────────────────────────────────────────────────────
+
+  _runLean(binary, args, env, cwd, tmpFile, onLine, signal) {
     return new Promise((resolve, reject) => {
-      // Write source to a temp file
-      const tmpFile = path.join(this._workDir, `verify_${Date.now()}.lean`);
-      fs.writeFileSync(tmpFile, leanSource, 'utf-8');
-
-      const env = {
-        ...process.env,
-        PATH: [
-          path.dirname(this._binaryPath),
-          path.join(os.homedir(), '.elan', 'bin'),
-          '/usr/local/bin',
-          '/opt/homebrew/bin',
-          process.env.PATH || '',
-        ].join(':'),
-      };
-
-      const proc = spawn(this._binaryPath, [tmpFile], {
+      const proc = spawn(binary, args, {
         env,
+        cwd: cwd || undefined,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
 
@@ -114,8 +187,10 @@ class LeanRunner {
         rawOutput += line + '\n';
         if (onLine) onLine(line);
 
-        // Rewrite file path in error messages to just the filename (cleaner UI)
-        const cleanLine = line.replace(tmpFile, 'theorem.lean');
+        // Normalise file path in error messages for cleaner UI
+        const cleanLine = line
+          .replace(tmpFile, 'theorem.lean')
+          .replace(this._workspacePath + path.sep, '');
         const m = cleanLine.match(LEAN_ERROR_RE);
         if (m) {
           errors.push({
@@ -128,14 +203,13 @@ class LeanRunner {
         }
       };
 
-      // Buffer partial lines across data chunks
       let outBuf = '';
       let errBuf = '';
 
       proc.stdout.on('data', (chunk) => {
         outBuf += chunk.toString();
         const lines = outBuf.split('\n');
-        outBuf = lines.pop(); // keep incomplete last line
+        outBuf = lines.pop();
         lines.forEach(handleLine);
       });
 
@@ -146,11 +220,11 @@ class LeanRunner {
         lines.forEach(handleLine);
       });
 
-      // Flush any remaining buffered output on close
       proc.on('close', (code) => {
         if (outBuf) handleLine(outBuf);
         if (errBuf) handleLine(errBuf);
-        try { fs.unlinkSync(tmpFile); } catch {}
+        // Clean up temp file (ignore errors — file may already be gone)
+        try { if (tmpFile) fs.unlinkSync(tmpFile); } catch {}
 
         const realErrors = errors.filter(e => e.severity === 'error');
         resolve({
@@ -158,24 +232,64 @@ class LeanRunner {
           exitCode: code,
           errors,
           rawOutput: rawOutput.trim(),
+          usedMathlib: this._usesMathlib && this._mathlibReady,
         });
       });
 
       proc.on('error', (err) => {
-        try { fs.unlinkSync(tmpFile); } catch {}
+        try { if (tmpFile) fs.unlinkSync(tmpFile); } catch {}
         reject(new Error(`Failed to spawn lean: ${err.message}`));
       });
 
-      // Honour cancellation
       if (signal) {
-        signal.addEventListener('abort', () => {
-          proc.kill('SIGTERM');
-        });
+        signal.addEventListener('abort', () => proc.kill('SIGTERM'));
       }
     });
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  _buildEnv() {
+    return {
+      ...process.env,
+      PATH: [
+        this._binaryPath ? path.dirname(this._binaryPath) : '',
+        path.join(os.homedir(), '.elan', 'bin'),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        process.env.PATH || '',
+      ].filter(Boolean).join(':'),
+    };
+  }
+
+  /**
+   * Resolve the `lake` binary.
+   * lake lives next to lean in elan's bin directory.
+   */
+  _resolveLakeBin() {
+    const candidates = [
+      this._which('lake'),
+      path.join(os.homedir(), '.elan', 'bin', 'lake'),
+      this._binaryPath ? path.join(path.dirname(this._binaryPath), 'lake') : null,
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      if (candidate && fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  /**
+   * Check whether the mathlib olean cache has been downloaded.
+   * We look for at least one .olean file in the lake build directory.
+   */
+  _detectMathlibCache() {
+    const cacheDir = path.join(this._workspacePath, '.lake', 'packages', 'mathlib');
+    this._mathlibReady = fs.existsSync(cacheDir);
+    if (this._mathlibReady) {
+      console.log('[LeanRunner] Mathlib workspace detected at', this._workspacePath);
+    }
+  }
 
   _which(name) {
     try {
@@ -190,7 +304,7 @@ class LeanRunner {
             process.env.PATH || '',
           ].join(':'),
         },
-      }).toString().trim();
+      }).toString().trim() || null;
     } catch {
       return null;
     }
@@ -199,10 +313,9 @@ class LeanRunner {
   _tryBinary(p) {
     if (!p || !fs.existsSync(p)) return null;
     try {
-      const out = execFileSync(p, ['--version'], {
+      return execFileSync(p, ['--version'], {
         timeout: 5000, stdio: 'pipe',
-      }).toString().trim();
-      return out || 'unknown version';
+      }).toString().trim() || 'unknown version';
     } catch {
       return null;
     }

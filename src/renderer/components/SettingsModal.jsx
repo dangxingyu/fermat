@@ -14,6 +14,7 @@ export default function SettingsModal({ onClose }) {
     verificationMode: 'off',   // 'off' | 'lean'
     leanBinaryPath: '',        // empty → auto-detect
     leanMaxRetries: 3,
+    leanUsesMathlib: false,    // opt-in: requires lean-workspace with cache
   });
   const [leanDetect, setLeanDetect] = useState(null); // { available, path, version } | null
   const [leanTesting, setLeanTesting] = useState(false);
@@ -59,6 +60,7 @@ export default function SettingsModal({ onClose }) {
         lean: {
           binaryPath: settings.leanBinaryPath,
           maxRetries: settings.leanMaxRetries,
+          usesMathlib: settings.leanUsesMathlib,
         },
       });
 
@@ -177,11 +179,20 @@ export default function SettingsModal({ onClose }) {
                 onChange={e => update('leanMaxRetries', parseInt(e.target.value))}
               />
 
-              <div style={{ marginTop: 10, padding: '8px 10px', background: 'var(--bg-hover)', borderRadius: 3, fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                <strong>Note:</strong> Lean verification uses <code>lean</code> core only (no Mathlib).
-                Most basic proofs work without Mathlib.
-                Mathlib support (~15 GB) is not yet available in this version.
-              </div>
+              <label style={{ marginTop: 12, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={settings.leanUsesMathlib}
+                  onChange={e => update('leanUsesMathlib', e.target.checked)}
+                  style={{ marginTop: 2, flexShrink: 0 }}
+                />
+                <span>
+                  Import Mathlib
+                  <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>
+                    (requires <code>lake exe cache get</code> in lean-workspace — ~5–10 GB download)
+                  </span>
+                </span>
+              </label>
             </>
           )}
         </div>
