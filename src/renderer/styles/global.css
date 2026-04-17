@@ -395,7 +395,11 @@ body::before {
 
 .pdf-panel {
   flex: 1;
-  min-width: 0; /* prevent flex item from expanding beyond its share with wide PDF content */
+  min-width: 0;  /* prevent flex item from expanding beyond its share with wide PDF content */
+  min-height: 0; /* nested-flex-column scroll fix: without this, .pdf-viewer's
+                    flex:1 + overflow:auto never scrolls because its content (.pdf-pages-stack)
+                    pushes every ancestor flex item past the viewport height. */
+  height: 100%;
   background: #16110d;
   border-left: 1px solid var(--border);
   display: flex;
@@ -414,10 +418,12 @@ body::before {
   font-style: italic;
   font-variation-settings: 'opsz' 9;
   color: var(--text-muted);
+  flex-shrink: 0; /* toolbar stays fixed-size; .pdf-viewer gets all remaining height */
 }
 
 .pdf-viewer {
-  flex: 1;
+  flex: 1 1 0;      /* explicit flex-basis:0 so overflow:auto actually kicks in */
+  min-height: 0;    /* same nested-flex-column scroll fix as on .pdf-panel */
   overflow: auto;
   padding: 20px;
   text-align: center;
@@ -429,6 +435,11 @@ body::before {
   align-items: center;
   gap: 20px;
   padding-bottom: 40px;
+  /* Center the stack horizontally when pages are narrower than the viewer;
+     when pages are wider, width: max-content triggers horizontal scroll. */
+  width: max-content;
+  min-width: 100%;
+  margin: 0 auto;
 }
 
 .pdf-page-container {
