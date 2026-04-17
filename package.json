@@ -54,9 +54,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.85.0",
-    "chokidar": "^3.6.0",
     "electron-updater": "^6.1.7",
-    "d3": "^7.9.0",
     "electron-store": "^8.2.0",
     "monaco-editor": "^0.47.0",
     "pdfjs-dist": "^4.4.0",
