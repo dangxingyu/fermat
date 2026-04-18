@@ -487,7 +487,7 @@ class ClaudeCodeBackend {
     }
     if (this._hasClaudeCli) {
       const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
-      return this._runClaude(fullPrompt, onStream, signal);
+      return this._runClaude(fullPrompt, onStream, signal, model);
     }
     const Anthropic = require('@anthropic-ai/sdk');
     const client = new Anthropic({ apiKey });
@@ -658,12 +658,15 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
   /**
    * Run claude CLI in non-interactive (print) mode.
    * @param {AbortSignal} [signal] — kill the child process on abort (B-03)
+   * @param {string}      [model]  — Anthropic model id from settings (QA P1-02).
+   *                                 Without this, the CLI path silently
+   *                                 ignored the user's model choice.
    */
-  _runClaude(prompt, onStream, signal = undefined) {
+  _runClaude(prompt, onStream, signal = undefined, model = undefined) {
     return new Promise((resolve, reject) => {
       const args = [
         '--print',              // non-interactive, just output the result
-        '--model', 'claude-sonnet-4-6',
+        '--model', model || 'claude-sonnet-4-6',
       ];
 
       // Always pipe prompt via stdin (works for any prompt length)

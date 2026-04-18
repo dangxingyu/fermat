@@ -1,5 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
-import * as monaco from 'monaco-editor';
+// QA P1-04: import only the core editor API, not the barrel entry. The
+// barrel (`monaco-editor`) side-effect-imports 80+ language contributions
+// (abap, freemarker2, systemverilog, …) none of which Fermat uses — the
+// LaTeX grammar is registered by hand below. Core-only import shaves the
+// main chunk from ~3.79 MB to ~1 MB.
+import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { latexLanguage, latexTheme } from '../utils/latex-language';
 import { registerLaTeXCompletions, LATEX_AUTO_PAIRS } from '../utils/latex-completions';
 

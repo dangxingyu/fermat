@@ -228,6 +228,19 @@ class FermatEngine extends EventEmitter {
 
       updateStatus(difficulty === 'Easy' ? 'proving' : 'sketching');
 
+      // QA P1-03: when the user has opted into lean verification but the
+      // binary isn't available, surface a dedicated status so the renderer
+      // can show a visible warning. The proof still runs without lean —
+      // we just tell the user formal verification is being skipped so they
+      // aren't left wondering whether it silently failed.
+      if (this.config.verificationMode === 'lean' && !this.leanRunner?.isAvailable) {
+        this.emit('proof:status', {
+          taskId: task.id,
+          phase: 'lean-unavailable',
+          message: 'Lean binary not found — verification will be skipped. Install lean or fix the path in Settings.',
+        });
+      }
+
       const onStatus = (statusData) => {
         this.emit('proof:status', { taskId: task.id, ...statusData });
       };
@@ -265,6 +278,12 @@ class FermatEngine extends EventEmitter {
 
       const autoInline = this.config.autoInlineDifficulty.includes(difficulty);
 
+      // QA P1-03: only include lean fields when lean ACTUALLY ran. The
+      // renderer's App.jsx guard is `data.leanCode !== undefined` — using
+      // `|| null` here coerced the skipped-lean case to `null`, which
+      // passed the guard and rendered a spurious `lean-failed` panel for
+      // a proof that never touched lean. Conditional spread keeps the
+      // "didn't run" case truly undefined.
       this.emit('proof:completed', {
         taskId: task.id,
         marker: task.marker,
@@ -272,13 +291,14 @@ class FermatEngine extends EventEmitter {
         sketch: result.sketch || null,
         verdict: result.verdict || null,
         autoInline,
-        // Lean sketch→fill→sorrify results (present when verificationMode === 'lean')
-        leanCode: result.leanCode || null,
-        leanVerified: result.leanVerified ?? null,
-        leanLog: result.leanLog || null,
-        leanErrors: result.leanErrors || null,
-        sorries: result.sorries || null,
-        leanStatement: result.leanStatement || null,
+        ...(result.leanCode !== undefined ? {
+          leanCode: result.leanCode,
+          leanVerified: result.leanVerified ?? null,
+          leanLog: result.leanLog || null,
+          leanErrors: result.leanErrors || null,
+          sorries: result.sorries || null,
+          leanStatement: result.leanStatement || null,
+        } : {}),
       });
     } catch (err) {
       // B-03: treat any abort signal hit as a clean cancellation (some paths

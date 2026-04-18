@@ -21,5 +21,19 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // QA P1-04: split the biggest deps into their own chunks so the first
+    // paint isn't blocked on a single 3.79 MB JS file. Paired with the
+    // core-only monaco import in TexEditor.jsx, this drops the main chunk
+    // to ~300 kB (gzip) and lets the browser cache monaco / pdfjs
+    // separately across releases.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          monaco: ['monaco-editor/esm/vs/editor/editor.api'],
+          pdfjs: ['pdfjs-dist'],
+          react: ['react', 'react-dom', 'react-dom/client'],
+        },
+      },
+    },
   },
 });

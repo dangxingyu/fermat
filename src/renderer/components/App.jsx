@@ -565,6 +565,7 @@ export default function App() {
     // proof:status carries Lean phase transitions
     const offStatus = window.api.copilot.onProofStatus?.((data) => {
       const leanPhases = [
+        'lean-unavailable',
         'lean-sketching', 'lean-sketch-retry', 'lean-sketch-checking', 'lean-sketch-ok',
         'lean-statement-review',
         'lean-filling', 'lean-fill-ok', 'lean-fill-retry', 'lean-fill-failed',
@@ -572,8 +573,11 @@ export default function App() {
       ];
       if (!leanPhases.includes(data.phase)) return;
 
-      if (data.phase === 'lean-sketching' && data.attempt === 1) {
-        // New lean pass starting — reset output buffer and switch to Lean tab
+      // QA P1-03: surface "lean was requested but binary is missing" as a
+      // distinct state. Switch to the Lean tab so the warning banner is
+      // actually visible.
+      if (data.phase === 'lean-unavailable' || (data.phase === 'lean-sketching' && data.attempt === 1)) {
+        // New lean pass (or unavailable warning) — reset output buffer and switch tab
         leanOutputLinesRef.current = [];
         setRightTab('lean');
       }
@@ -589,6 +593,8 @@ export default function App() {
         ...(data.sketch    !== undefined ? { sketch:    data.sketch    } : {}),
         // Preserve sorries if provided
         ...(data.sorries   !== undefined ? { sorries:   data.sorries   } : {}),
+        // Human-readable message for lean-unavailable banner
+        ...(data.message   !== undefined ? { message:   data.message   } : {}),
       }));
     });
 

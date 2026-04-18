@@ -57,6 +57,22 @@ function ensureEngines() {
   copilotEngine = new FermatEngine({ leanRunner });
   texCompiler   = new TexCompiler();
   synctexBridge = new SynctexBridge();
+
+  // QA P1-01: attach proof-event forwarders ONCE, not inside createWindow.
+  // createWindow used to re-attach these every time, so on macOS each close
+  // + dock-reopen cycle multiplied the listener count by 1 and every proof
+  // event was sent N times. Listeners below reference `mainWindow` by
+  // variable binding, so they always send to whichever window is current.
+  const sendToRenderer = (channel, data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, data);
+    }
+  };
+  copilotEngine.on('proof:started',   (d) => sendToRenderer('copilot:proof-started',   d));
+  copilotEngine.on('proof:completed', (d) => sendToRenderer('copilot:proof-completed', d));
+  copilotEngine.on('proof:failed',    (d) => sendToRenderer('copilot:proof-failed',    d));
+  copilotEngine.on('proof:streaming', (d) => sendToRenderer('copilot:proof-streaming', d));
+  copilotEngine.on('proof:status',    (d) => sendToRenderer('copilot:proof-status',    d));
 }
 
 // Renderer reports its dirty state here so the close handler can decide.
@@ -273,22 +289,9 @@ function createWindow() {
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 
-  // Forward copilot events to renderer
-  copilotEngine.on('proof:started', (data) => {
-    mainWindow.webContents.send('copilot:proof-started', data);
-  });
-  copilotEngine.on('proof:completed', (data) => {
-    mainWindow.webContents.send('copilot:proof-completed', data);
-  });
-  copilotEngine.on('proof:failed', (data) => {
-    mainWindow.webContents.send('copilot:proof-failed', data);
-  });
-  copilotEngine.on('proof:streaming', (data) => {
-    mainWindow.webContents.send('copilot:proof-streaming', data);
-  });
-  copilotEngine.on('proof:status', (data) => {
-    mainWindow.webContents.send('copilot:proof-status', data);
-  });
+  // QA P1-01: proof-event forwarders are attached once in ensureEngines().
+  // Do NOT re-attach them here — createWindow() runs on every macOS dock
+  // re-activate, which would multiply listeners.
 }
 
 // ─── File Operations ───────────────────────────────────────────────

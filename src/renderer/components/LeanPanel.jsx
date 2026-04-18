@@ -69,6 +69,7 @@ export default function LeanPanel({
   // ── Derived helpers ──────────────────────────────────────────────────────
 
   const phaseLabel = {
+    'lean-unavailable':        '⚠ Lean unavailable',
     'lean-sketching':          'Generating sketch…',
     'lean-sketch-retry':       `Sketch retry ${attempt} / ${maxAttempts}…`,
     'lean-sketch-checking':    'Checking sketch…',
@@ -85,11 +86,14 @@ export default function LeanPanel({
   }[phase] ?? phase;
 
   const statusColor = {
+    'lean-unavailable':      '#d4a016',
     'lean-verified':         'var(--verdigris)',
     'lean-partial':          '#d4a016',
     'lean-failed':           'var(--vermillion)',
     'lean-statement-review': 'var(--accent)',
   }[phase] ?? 'var(--text-muted)';
+
+  const isUnavailable = phase === 'lean-unavailable';
 
   const isActive = [
     'lean-sketching', 'lean-sketch-retry', 'lean-sketch-checking',
@@ -133,6 +137,23 @@ export default function LeanPanel({
         )}
         <span style={{ ...styles.status, color: statusColor }}>{phaseLabel}</span>
       </div>
+
+      {/* ════════════════════════════════════════════════════════════ */}
+      {/* MODE 0: Lean unavailable — banner only, no sketch/log        */}
+      {/* ════════════════════════════════════════════════════════════ */}
+      {isUnavailable && (
+        <div style={styles.unavailablePanel}>
+          <div style={styles.unavailableTitle}>
+            ⚠ Lean binary not found — verification skipped
+          </div>
+          <div style={styles.unavailableDetail}>
+            {leanState.message || 'Install lean (via elan / rustup-style toolchain) or set the lean binary path in Settings → Lean 4 Verification.'}
+          </div>
+          <div style={styles.unavailableDetail}>
+            The LaTeX proof was generated normally. Formal verification was not performed.
+          </div>
+        </div>
+      )}
 
       {/* ════════════════════════════════════════════════════════════ */}
       {/* MODE A: Statement Review (pipeline paused)                  */}
@@ -229,7 +250,7 @@ export default function LeanPanel({
       {/* ════════════════════════════════════════════════════════════ */}
       {/* MODE C: Active / Failed — sketch code + sorry list + log    */}
       {/* ════════════════════════════════════════════════════════════ */}
-      {!isReview && !isVerified && (
+      {!isReview && !isVerified && !isUnavailable && (
         <>
           {/* ── Sketch / final code ──────────────────────────────── */}
           {leanCode && (
@@ -288,8 +309,8 @@ export default function LeanPanel({
         </>
       )}
 
-      {/* ── Live lean output (always shown when not in review) ───── */}
-      {!isReview && (
+      {/* ── Live lean output (hidden in review + unavailable states) ── */}
+      {!isReview && !isUnavailable && (
         <div style={styles.section}>
           <div style={styles.sectionHeader}>
             lean output
@@ -318,7 +339,7 @@ export default function LeanPanel({
       )}
 
       {/* ── Error details ─────────────────────────────────────────── */}
-      {!isReview && leanErrors && leanErrors.filter(e => e.severity === 'error').length > 0 && (
+      {!isReview && !isUnavailable && leanErrors && leanErrors.filter(e => e.severity === 'error').length > 0 && (
         <div style={styles.section}>
           <div style={styles.sectionHeader}>Error details</div>
           {leanErrors.filter(e => e.severity === 'error').map((err, i) => (
@@ -564,6 +585,33 @@ const styles = {
     background: 'transparent',
     color: 'var(--vermillion)',
     border: '1px solid rgba(200,80,60,0.3)',
+  },
+
+  // ── Lean unavailable banner (QA P1-03) ───────────────────────────────────
+  unavailablePanel: {
+    padding: '16px 16px 18px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    background: 'rgba(212, 160, 22, 0.06)',
+    borderBottom: '1px solid rgba(212, 160, 22, 0.22)',
+    borderLeft: '3px solid #d4a016',
+    flexShrink: 0,
+  },
+  unavailableTitle: {
+    fontFamily: 'var(--font-display)',
+    fontStyle: 'italic',
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#d4a016',
+    lineHeight: 1.4,
+  },
+  unavailableDetail: {
+    fontFamily: 'var(--font-display)',
+    fontStyle: 'italic',
+    fontSize: 11.5,
+    color: 'var(--text-muted)',
+    lineHeight: 1.55,
   },
 
   // ── Verified panel ───────────────────────────────────────────────────────
