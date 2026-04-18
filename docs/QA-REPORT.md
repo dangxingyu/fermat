@@ -23,8 +23,8 @@ cross-checks. Severity scale: **Critical** (crash/data-loss/exploit) →
 - `useEffect` event listeners consistently return cleanup; no obvious renderer
   leak.
 
-**Three real bugs worth fixing before a release, one bundle-size issue, plus
-polish items.** Full list below.
+**Five P1 bugs** (four correctness, one perf), **ten P2 polish/silent-risk items**,
+**seven P3 nits**. Full list below.
 
 ---
 
@@ -117,7 +117,36 @@ isn't met.
 
 ---
 
-#### P1-04  3.79 MB (1.00 MB gzip) main renderer bundle
+#### P1-04  `copilot:proof-streaming` emitted but never consumed
+**File**: `src/main/main.js:287–288`, `src/renderer/hooks/useCopilot.js:83–94`
+**Description**: `copilotEngine.on('proof:streaming', …)` forwards live LLM
+token deltas to the renderer via IPC. `preload.js` exposes
+`window.api.copilot.onProofStreaming`. However, `useCopilot.js` subscribes to
+`onProofStarted`, `onProofCompleted`, `onProofStatus`, and `onProofFailed` —
+never `onProofStreaming`. Every streaming chunk is silently discarded. The UI
+shows no live output while a proof is generating; users see only the final
+result after a potentially long wait.
+
+This also means the `proof:streaming` IPC channel is live but produces zero
+user-visible effect — the streaming infrastructure is wired in main and in
+preload but dead in the renderer.
+
+**Suggestion**: In `useCopilot.js`, add:
+```js
+const offStreaming = window.api.copilot.onProofStreaming((data) => {
+  setProofTasks(prev => {
+    const next = new Map(prev);
+    const t = next.get(data.taskId) || {};
+    next.set(data.taskId, { ...t, streamingText: (t.streamingText || '') + data.text });
+    return next;
+  });
+});
+// …and in cleanup: offStreaming?.();
+```
+
+---
+
+#### P1-05  3.79 MB (1.00 MB gzip) main renderer bundle
 **File**: [vite.config.js](vite.config.js), output `dist/assets/index-*.js`
 **Description**: Vite warns the main chunk exceeds 500 kB. Almost the entire
 weight is `monaco-editor`: the build ships 80+ language definitions (abap,
@@ -188,6 +217,18 @@ main.js unless a near-term feature needs it.
 entirely from `proof:*` events inside `useCopilot` and never polls. No
 consumer.
 **Suggestion**: remove until a real caller appears.
+
+#### P2-05b  Dead IPC channel: `lean:verify`
+**File**: [src/main/main.js:501-513](src/main/main.js), [src/main/preload.js:76](src/main/preload.js)
+**Description**: `lean:verify` is registered as `ipcMain.handle` and exposed
+in `window.api.lean.verify`. Grepping all renderer files (`App.jsx`,
+`useCopilot.js`, `SettingsModal.jsx`, `LeanPanel.jsx`) confirms no caller.
+Lean verification flows exclusively through the copilot pipeline. The orphaned
+handler accepts arbitrary Lean source from the renderer and spawns `lean`
+without an abort signal — a hung invocation cannot be cancelled.
+
+**Suggestion**: remove the `lean:verify` handle and its preload bridge, or
+document it as a deliberate future/external use case and add a signal.
 
 #### P2-06  Duplicate subscription to `copilot:proof-completed`
 **File**: [src/renderer/hooks/useCopilot.js:84](src/renderer/hooks/useCopilot.js), [src/renderer/components/App.jsx:596](src/renderer/components/App.jsx)
@@ -265,14 +306,71 @@ key they get 20 stacked toasts without any dedupe.
 **Suggestion**: coalesce auth-error toasts by `code` so only one is visible
 at a time.
 
-#### P3-03  `electron-builder` `files:` array duplicates coverage
+#### P3-03  `electron-builder` `files:` array ships two dead copies of source files
 **File**: [package.json:22-30](package.json)
-**Description**: `dist/**/*` is the built renderer; the `src/renderer/**/*`
-entry also packages the unbuilt sources into the app bundle. Either is fine
-alone, shipping both bloats the DMG by a few hundred kB for no reason (the
-app loads from `dist/` in production — see main.js:131).
-**Suggestion**: drop `"src/renderer/**/*"` from `build.files` and keep only
-`dist/`, `src/main/`, `public/`, `.claude/skills/`.
+**Description**: Two packaging problems:
+1. `dist/**/*` is the built renderer; `src/renderer/**/*` also packages the
+   unbuilt JSX sources into the asar. The app loads from `dist/` in production
+   (main.js:131), so the source copy is dead weight (~200 kB).
+2. `.claude/skills/**/*` appears in both `build.files` (asar) **and**
+   `extraResources` (at `resources/.claude/skills`). The backend reads from
+   `process.resourcesPath` (extraResources), so the asar copy is also dead.
+
+**Suggestion**: remove `"src/renderer/**/*"` and `".claude/skills/**/*"` from
+`build.files`; leave the skills only in `extraResources`.
+
+---
+
+#### P3-04  `ProofTask` objects accumulate in `this.tasks` forever
+**File**: [src/main/copilot-engine.js:103](src/main/copilot-engine.js)
+**Description**: `submitProofRequest` adds each task to `this.tasks` but only
+`cancelProof` calls `this.tasks.delete`. Completed and failed tasks are never
+removed. In a long session (30+ "Prove All" runs across a large document),
+`this.tasks` and its `AbortController` refs grow without bound.
+
+**Suggestion**: schedule `this.tasks.delete(task.id)` after a 60-second grace
+period on completion/failure so the renderer can still read the final status.
+
+---
+
+#### P3-05  DevTools always accessible via View menu in production builds
+**File**: [src/main/main.js:254-258](src/main/main.js)
+**Description**: The application menu always includes `{ role: 'reload' }`,
+`{ role: 'forceReload' }`, and `{ role: 'toggleDevTools' }` regardless of
+`isDev`. In a packaged DMG, any user can open the DevTools console (⌘⌥I),
+read the API key from React state while Settings is open, or manipulate IPC
+calls.
+
+**Suggestion**: gate these items behind `isDev`:
+```js
+...(isDev ? [
+  { role: 'reload' }, { role: 'forceReload' }, { role: 'toggleDevTools' },
+  { type: 'separator' },
+] : []),
+```
+
+---
+
+#### P3-06  Auto-update check timer fires twice on macOS re-activate
+**File**: [src/main/main.js:179-184](src/main/main.js)
+**Description**: `setTimeout(() => autoUpdater.checkForUpdates(), 5000)` is
+inside `createWindow()`, which is called again on macOS `activate` (Dock
+click after all windows are closed). The second invocation registers a second
+5-second timer → two sequential `checkForUpdates()` calls → two
+`update:available` IPC messages → the update banner renders twice.
+
+**Suggestion**: move the update-check block to `app.whenReady()` so it runs
+exactly once per process lifetime.
+
+---
+
+#### P3-07  `package.json` missing `author` field
+**File**: [package.json](package.json)
+**Description**: `electron-builder` warns at every build:
+`author is missed in the package.json`. Some OS trust dialogs, the DMG
+metadata, and the macOS "About" panel show an empty author string.
+
+**Suggestion**: add `"author": "Fermat Labs"` (or your organisation name).
 
 ---
 
@@ -286,7 +384,9 @@ get re-litigated on the next audit:
   `onX` wrappers; no typos, no orphans.
 - **Event emitter consistency**: `copilotEngine.emit` → `copilotEngine.on`
   (main forwards) → `webContents.send` → `ipcRenderer.on` (preload) →
-  renderer `onProof*` subscribers. Full chain matches for all 5 proof events.
+  renderer `onProof*` subscribers. Chain is complete for `proof:started`,
+  `proof:completed`, `proof:failed`, `proof:status`. **`proof:streaming` is
+  wired in main+preload but has no renderer subscriber — see P1-04.**
 - **`useEffect` cleanup**: every subscription in `App.jsx`, `useCopilot`,
   `LogPanel`, `PdfViewer`, `TexEditor`, `Toolbar`, `LeanPanel`, `SettingsModal`
   returns a teardown that removes listeners / disposes observers /
@@ -378,13 +478,19 @@ into `'cancelled'` quietly without a failed-toast ([copilot-engine.js:286-288](s
 
 If you only have a day:
 
-1. **P1-02** — threading `model` through `_runClaude` is a 2-minute fix and
+1. **P1-02** — threading `model` through `_runClaude` is a 2-minute fix;
    silently wrong behaviour is the worst kind.
 2. **P1-03** — make "lean verification unavailable" a loud failure not a
    silent skip.
 3. **P1-01** — the macOS re-activate leak. Two-line fix inside
    `ensureEngines()`.
-4. **P1-04** — Monaco bundle trim. Bigger change, but the single largest
-   user-facing win after the correctness bugs above.
+4. **P1-04** — subscribe to `onProofStreaming` in `useCopilot`. The
+   streaming infrastructure is fully wired in main+preload; just one
+   subscription is missing.
+5. **P1-05** — Monaco bundle trim. Bigger change, but the single largest
+   user-facing cold-start win after the correctness bugs above.
 
-Everything in P2/P3 can sit until a dedicated polish pass.
+Medium-bang-for-buck next: **P2-01** (sandbox), **P2-02** (CSP),
+**P3-05** (disable DevTools in prod), **P3-06** (update timer once per process).
+
+Everything else can sit until a dedicated polish pass.
