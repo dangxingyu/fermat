@@ -24,7 +24,13 @@ cross-checks. Severity scale: **Critical** (crash/data-loss/exploit) →
   leak.
 
 **Five P1 bugs** (four correctness, one perf), **ten P2 polish/silent-risk items**,
-**seven P3 nits**. Full list below.
+**nine P3 nits**. Full list below.
+
+> **Correction to previous draft**: P1-03 was described as "silent no-op with no
+> lean tab". Dynamic testing confirms the opposite: when lean is missing, the
+> `leanCode: null` in `proof:completed` passes the `!== undefined` guard in
+> `App.jsx`, causing the Lean tab to appear with a **false `lean-failed` status**.
+> See P1-03 below for the precise root cause and fix.
 
 ---
 
@@ -96,24 +102,52 @@ is missing. One-line change per callsite.
 
 ---
 
-#### P1-03  Silent no-op when `verificationMode: 'lean'` but lean binary missing
-**File**: [src/main/claude-code-backend.js:167](src/main/claude-code-backend.js), [src/renderer/components/App.jsx:596-614](src/renderer/components/App.jsx)
+#### P1-03  Misleading `lean-failed` UI state when lean binary is missing
+**File**: [src/main/copilot-engine.js:268-282](src/main/copilot-engine.js), [src/renderer/components/App.jsx:596-614](src/renderer/components/App.jsx)
 **Description**: `prove()` enters the lean pipeline only when
 `options.verificationMode === 'lean' && options.leanRunner?.isAvailable`.
 If the user enables lean mode but has no lean binary installed (or the path in
 Settings is wrong), `isAvailable` is `false` and the entire lean block is
-skipped. `results.leanCode` stays `undefined`, so `App.jsx:597` (`if (data.leanCode !== undefined)`)
-never fires, the Lean tab never appears, and there is **no user-visible
-indication that lean didn't run** — the LaTeX proof just arrives normally.
+skipped.
 
-A user who turned on lean verification will reasonably assume the proof was
-formally checked. It wasn't.
+The `proof:completed` event is then emitted with the Lean fields coerced to
+`null` via `result.leanCode || null` (`undefined || null = null`). In `App.jsx`:
 
-**Suggestion**: when `verificationMode === 'lean' && !leanRunner.isAvailable`,
-emit a `proof:status` with `phase: 'lean-unavailable'` (or throw a classified
-warning) so the renderer can show a toast "Lean not found — install or fix
-path in Settings". Alternatively, refuse to submit when the precondition
-isn't met.
+```js
+if (data.leanCode !== undefined)   // null !== undefined → TRUE — condition fires!
+```
+
+Because `null` is not `undefined`, `setLeanState` runs with `leanCode: null`
+and the phase logic falls through to `'lean-failed'`:
+
+```js
+phase: data.leanVerified ? 'lean-verified'        // null → false
+     : (data.sorries?.some(...)) ? 'lean-partial'  // null?.some → undefined → false
+     : 'lean-failed'                               // ← always taken
+```
+
+Result: the Lean tab **appears** with a `lean-failed` state showing no errors.
+A user who turned on lean verification sees a formal verification failure for a
+proof that was never actually sent to Lean — an actively misleading outcome,
+worse than silence.
+
+**Suggested fix** (two options):
+
+Option A — emit `undefined` (not `null`) when lean wasn't run so the guard works:
+```js
+// copilot-engine.js
+...(result.leanCode !== undefined ? {
+  leanCode: result.leanCode,
+  leanVerified: result.leanVerified ?? null,
+  leanErrors:   result.leanErrors  ?? [],
+  sorries:      result.sorries     ?? [],
+  leanStatement: result.leanStatement ?? null,
+} : {}),
+```
+
+Option B — emit a `lean-unavailable` phase via `proof:status` and let the
+renderer show a toast "Lean not found — install or fix path in Settings",
+refusing to start the proof in lean mode when the precondition isn't met.
 
 ---
 
@@ -361,6 +395,35 @@ click after all windows are closed). The second invocation registers a second
 
 **Suggestion**: move the update-check block to `app.whenReady()` so it runs
 exactly once per process lifetime.
+
+---
+
+#### P3-07b  Lean binary detected three times on every startup
+**File**: [src/main/main.js:55,142,144](src/main/main.js), [src/main/copilot-engine.js:83-86](src/main/copilot-engine.js)
+**Description**: `leanRunner.detect()` runs three times per launch:
+1. `ensureEngines()` → `leanRunner.detect()` (line 55)
+2. `copilotEngine.configure(storedCopilot)` internally calls `leanRunner.detect()` again (copilot-engine.js:84)
+3. Explicit `leanRunner.detect(storedLean.binaryPath || undefined)` at main.js:144
+
+Call 3 is unconditionally redundant with call 2 — both pass the same stored
+`binaryPath`, and call 2 already ran inside `configure()`. Each `detect()` runs
+`which lean` (blocking via `execFileSync`) + `lean --version`, adding ~150–400 ms.
+
+**Suggestion**: remove the explicit `leanRunner.detect()` call at `main.js:144`
+(and `leanRunner.setUsesMathlib()` at line 145 — also already handled by
+`configure()`).
+
+---
+
+#### P3-07c  No React StrictMode
+**File**: [src/renderer/main.jsx](src/renderer/main.jsx)
+**Description**: `App` is rendered without `<React.StrictMode>`. StrictMode
+double-invokes `useEffect` in development to surface missing cleanup code.
+Without it, subtle listener-leak regressions (e.g. re-introducing P1-01)
+would be harder to catch during development.
+
+**Suggestion**: wrap the root render in `<React.StrictMode>` and verify all
+`useEffect` cleanups are idempotent under double-invocation (they appear to be).
 
 ---
 
