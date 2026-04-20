@@ -24,7 +24,7 @@
  *   Parsed into { file, line, col, severity, message } structs.
  */
 
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -90,21 +90,24 @@ class LeanRunner {
   // ─── Binary detection ──────────────────────────────────────────────────────
 
   /**
-   * Detect the lean binary.
+   * Detect the lean binary asynchronously — does not block the event loop.
+   * Callers should fire-and-forget or await; never call synchronously from
+   * startup code that runs before the renderer is ready.
+   *
    * @param {string} [override] — explicit path from settings (may be empty)
-   * @returns {{ available: boolean, path: string|null, version: string|null,
-   *             replAvailable: boolean, mode: string }}
+   * @returns {Promise<{ available: boolean, path: string|null, version: string|null,
+   *                     replAvailable: boolean, mode: string }>}
    */
-  detect(override) {
-    const candidates = [
-      override || null,
-      process.env.LEAN || null,
-      this._which('lean'),
-      path.join(os.homedir(), '.elan', 'bin', 'lean'),
-    ].filter(Boolean);
+  async detect(override) {
+    const candidates = (await Promise.all([
+      Promise.resolve(override || null),
+      Promise.resolve(process.env.LEAN || null),
+      this._whichAsync('lean'),
+      Promise.resolve(path.join(os.homedir(), '.elan', 'bin', 'lean')),
+    ])).filter(Boolean);
 
     for (const candidate of candidates) {
-      const version = this._tryBinary(candidate);
+      const version = await this._tryBinaryAsync(candidate);
       if (version) {
         this._binaryPath = candidate;
         this._available = true;
@@ -436,6 +439,37 @@ class LeanRunner {
     return false;
   }
 
+  _whichAsync(name) {
+    const env = {
+      ...process.env,
+      PATH: [
+        path.join(os.homedir(), '.elan', 'bin'),
+        '/usr/local/bin',
+        '/opt/homebrew/bin',
+        process.env.PATH || '',
+      ].join(':'),
+    };
+    return new Promise(resolve => {
+      const t = setTimeout(() => { proc.kill('SIGTERM'); resolve(null); }, 2000);
+      const proc = execFile('which', [name], { env, stdio: 'pipe' }, (err, stdout) => {
+        clearTimeout(t);
+        resolve(err ? null : (stdout.trim() || null));
+      });
+    });
+  }
+
+  _tryBinaryAsync(p) {
+    if (!p || !fs.existsSync(p)) return Promise.resolve(null);
+    return new Promise(resolve => {
+      const t = setTimeout(() => { proc.kill('SIGTERM'); resolve(null); }, 5000);
+      const proc = execFile(p, ['--version'], { stdio: 'pipe' }, (err, stdout) => {
+        clearTimeout(t);
+        resolve(err ? null : (stdout.trim() || 'unknown version'));
+      });
+    });
+  }
+
+  // Synchronous variants kept for internal use in _resolveLakeBin and tests.
   _which(name) {
     try {
       return execFileSync('which', [name], {

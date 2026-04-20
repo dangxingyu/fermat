@@ -54,7 +54,8 @@ let completionBackend;
 function ensureEngines() {
   if (leanRunner)  return;
   leanRunner    = new LeanRunner();
-  leanRunner.detect();
+  // detect() is async (spawns child processes). Called after window loads — see
+  // createWindow() — so it never blocks the main event loop during startup.
   // Q-02: share one LeanRunner across IPC + the copilot engine
   copilotEngine = new FermatEngine({ leanRunner });
   texCompiler   = new TexCompiler();
@@ -155,14 +156,21 @@ function createWindow() {
   // ─── Restore persisted settings ───────────────────────────────────────
   // Apply stored copilot / tex / lean config before the renderer mounts, so
   // the first proof submission already picks up the saved API key.
+  // NOTE: leanRunner.detect() is intentionally excluded here — it's async and
+  // can block the event loop for several seconds (elan shim init). Lean binary
+  // detection is deferred to after the renderer has loaded (see below).
   try {
     const storedCopilot = settingsStore.get('copilot');
     if (storedCopilot) {
       copilotEngine.configure(storedCopilot);
       const storedLean = storedCopilot.lean || {};
-      leanRunner.detect(storedLean.binaryPath || undefined);
       leanRunner.setUsesMathlib(!!storedLean.usesMathlib);
       leanRunner.setUseRepl(!!storedLean.useRepl);
+      // Fire lean binary detection asynchronously after window is ready.
+      mainWindow.webContents.once('did-finish-load', () => {
+        leanRunner.detect(storedLean.binaryPath || undefined)
+          .catch(err => console.warn('[LeanRunner] Detection error:', err.message));
+      });
     }
     const storedEngine = settingsStore.get('texEngine');
     if (storedEngine) texCompiler.setEngine(storedEngine);
@@ -460,9 +468,11 @@ ipcMain.handle('copilot:configure', async (_event, config) => {
   } else {
     console.log('[Copilot] Configured WITHOUT Claude API key — will rely on Claude CLI if installed');
   }
-  // Re-detect lean binary whenever settings change (user may have updated leanPath)
+  // Re-detect lean binary whenever settings change (user may have updated leanPath).
+  // detect() is async — fire and forget; the result is visible via lean:get-path.
   if (config?.lean?.binaryPath !== undefined) {
-    leanRunner.detect(config.lean.binaryPath || undefined);
+    leanRunner.detect(config.lean.binaryPath || undefined)
+      .catch(err => console.warn('[LeanRunner] Detection error:', err.message));
   }
   if (config?.lean?.usesMathlib !== undefined) {
     leanRunner.setUsesMathlib(!!config.lean.usesMathlib);

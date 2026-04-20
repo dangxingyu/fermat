@@ -77,23 +77,25 @@ describe('LeanRunner._tryBinary', () => {
 });
 
 describe('LeanRunner.detect', () => {
-  // detect() may shell out to `which lean` + `lean --version` etc. On a
-  // machine where lean is installed, this can take several seconds of wall
-  // clock time. Bump the per-test timeout so CI on either config passes.
+  // detect() shells out asynchronously to `which lean` + `lean --version` etc.
+  // On a machine where lean is installed, this can take several seconds.
+  // Bump the per-test timeout so CI on either config passes.
   const longTimeout = 15000;
 
-  it('returns a shape of { available, path, version } regardless of success', () => {
+  it('returns a shape of { available, path, version } regardless of success', async () => {
     const r = new LeanRunner();
-    const result = r.detect('/nonexistent/lean');
+    const result = await r.detect('/nonexistent/lean');
     expect(result).toHaveProperty('available');
     expect(result).toHaveProperty('path');
     expect(result).toHaveProperty('version');
+    expect(result).toHaveProperty('replAvailable');
+    expect(result).toHaveProperty('mode');
     expect(typeof result.available).toBe('boolean');
   }, longTimeout);
 
-  it('falls through when override path does not exist', () => {
+  it('falls through when override path does not exist', async () => {
     const r = new LeanRunner();
-    r.detect('/absolutely/not/a/real/path');
+    await r.detect('/absolutely/not/a/real/path');
     // binaryPath either resolves to a real system lean or null — both are fine.
     const p = r.binaryPath;
     expect(p === null || typeof p === 'string').toBe(true);
