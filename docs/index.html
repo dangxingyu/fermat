@@ -672,6 +672,123 @@
       text-align: center;
     }
 
+    /* ─── "Love for Fermat" — fake testimonials from dead mathematicians ─
+       Mathpix's "Love for Mathpix" grid, but the testimonials are apocryphal
+       and the avatars are Wikipedia Commons public-domain portraits with a
+       monogram fallback if the image fails to load. The sepia filter drops
+       the photographs into the warm Fermat palette instead of looking like
+       obvious Wikipedia scrapes. */
+    .testimonials {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+    }
+    .testimonial {
+      background: var(--ink-03);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      padding: 28px 28px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      transition: border-color 0.25s, background-color 0.25s, transform 0.25s;
+    }
+    .testimonial:hover {
+      border-color: var(--border-strong);
+      background: var(--ink-06);
+      transform: translateY(-1px);
+    }
+
+    .testimonial-quote {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 400;
+      font-size: 17px;
+      line-height: 1.5;
+      letter-spacing: -0.005em;
+      color: var(--ink-83);
+      flex: 1;
+    }
+    .testimonial-quote::before {
+      content: '\201C';
+      font-family: var(--font-display);
+      font-style: normal;
+      color: var(--ink-22);
+      font-size: 2em;
+      line-height: 0;
+      vertical-align: -0.3em;
+      margin-right: 3px;
+    }
+
+    .testimonial-meta {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .avatar {
+      width: 46px; height: 46px;
+      border-radius: 50%;
+      border: 1px solid var(--border-strong);
+      background: var(--ink-06);
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    .avatar img {
+      width: 100%; height: 100%;
+      object-fit: cover;
+      /* Warm sepia treatment — drops the Wikipedia portrait into Fermat's
+         dark-manuscript palette. Slightly desaturated, slightly amber. */
+      filter: grayscale(0.35) sepia(0.3) contrast(1.05) brightness(0.92);
+    }
+    .avatar-fallback {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 500;
+      font-size: 20px;
+      color: var(--ink-83);
+      line-height: 1;
+    }
+
+    .testimonial-identity { min-width: 0; flex: 1; }
+    .testimonial-name {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 500;
+      font-size: 14.5px;
+      letter-spacing: -0.01em;
+      line-height: 1.25;
+      color: var(--ink);
+    }
+    .testimonial-affiliation {
+      font-family: var(--font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.03em;
+      color: var(--ink-40);
+      margin-top: 3px;
+    }
+
+    .testimonials-footnote {
+      margin-top: 48px;
+      text-align: center;
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: 13px;
+      color: var(--ink-40);
+      letter-spacing: -0.005em;
+    }
+    .testimonials-footnote .mark {
+      color: var(--vermillion);
+      margin-right: 6px;
+      font-style: normal;
+    }
+
     /* ─── Scroll reveal animation ─────────────────────────────────────── */
     .reveal {
       opacity: 0;
@@ -703,6 +820,7 @@
       }
       .nav-hamburger { display: inline-flex; }
       .features { grid-template-columns: 1fr; }
+      .testimonials { grid-template-columns: repeat(2, 1fr); }
       .hero-glyph { display: none; }
       .waitlist { padding: 48px 28px; }
       .waitlist-form { flex-direction: column; }
@@ -717,6 +835,8 @@
       .hero-actions .btn { width: 100%; justify-content: center; }
       .hero-actions { flex-direction: column; align-items: stretch; }
       .feature-card { padding: 24px; }
+      .testimonials { grid-template-columns: 1fr; }
+      .testimonial { padding: 24px; }
     }
   </style>
 </head>
@@ -905,6 +1025,139 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
         Click <strong>Submit&nbsp;All</strong> in the toolbar. Easy proofs appear instantly inline.
         Hard proofs wait for your review — with the generated LaTeX, the sketch, and the verdict
         all visible before anything is written to your file.
+      </p>
+    </div>
+  </section>
+
+  <!-- ─── Love for Fermat — apocryphal testimonials ──────────────────
+       Avatars load from Wikipedia Commons (public domain portraits of
+       long-deceased mathematicians). If any image fails, the onerror
+       handler shows an italic-Fraunces monogram in the same circle. -->
+  <section id="testimonials">
+    <div class="container">
+      <div class="section-head reveal" style="text-align: center; margin: 0 auto 64px; max-width: 720px;">
+        <div class="eyebrow" style="display: inline-flex;">Love for Fermat</div>
+        <h2>What they <span class="italic">would have said,</span><br>had their margins been bigger.</h2>
+      </div>
+
+      <div class="testimonials">
+
+        <!-- Pierre de Fermat — the meta joke -->
+        <div class="testimonial reveal">
+          <p class="testimonial-quote">Finally.</p>
+          <div class="testimonial-meta">
+            <div class="avatar">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Pierre_de_Fermat.jpg/200px-Pierre_de_Fermat.jpg"
+                   alt="Pierre de Fermat"
+                   onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
+              <span class="avatar-fallback" style="display:none;">F</span>
+            </div>
+            <div class="testimonial-identity">
+              <div class="testimonial-name">Pierre de Fermat</div>
+              <div class="testimonial-affiliation">1607–1665 · Toulouse</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Newton — riff on "shoulders of giants" -->
+        <div class="testimonial reveal">
+          <p class="testimonial-quote">
+            I stood on the shoulders of giants. Fermat stands on mine.
+          </p>
+          <div class="testimonial-meta">
+            <div class="avatar">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/GodfreyKneller-IsaacNewton-1689.jpg/200px-GodfreyKneller-IsaacNewton-1689.jpg"
+                   alt="Isaac Newton"
+                   onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
+              <span class="avatar-fallback" style="display:none;">N</span>
+            </div>
+            <div class="testimonial-identity">
+              <div class="testimonial-name">Isaac Newton</div>
+              <div class="testimonial-affiliation">1642–1727 · Trinity College</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Euler — prolific + half-blind joke -->
+        <div class="testimonial reveal">
+          <p class="testimonial-quote">
+            I produced eight hundred papers with one eye. Think what I'd have managed with autocomplete.
+          </p>
+          <div class="testimonial-meta">
+            <div class="avatar">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d7/Leonhard_Euler.jpg/200px-Leonhard_Euler.jpg"
+                   alt="Leonhard Euler"
+                   onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
+              <span class="avatar-fallback" style="display:none;">E</span>
+            </div>
+            <div class="testimonial-identity">
+              <div class="testimonial-name">Leonhard Euler</div>
+              <div class="testimonial-affiliation">1707–1783 · St. Petersburg</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gauss — "pauca sed matura" -->
+        <div class="testimonial reveal">
+          <p class="testimonial-quote">
+            <em>Pauca sed matura.</em> Fewer, riper — and now with auto-completion.
+          </p>
+          <div class="testimonial-meta">
+            <div class="avatar">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Carl_Friedrich_Gauss.jpg/200px-Carl_Friedrich_Gauss.jpg"
+                   alt="Carl Friedrich Gauss"
+                   onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
+              <span class="avatar-fallback" style="display:none;">G</span>
+            </div>
+            <div class="testimonial-identity">
+              <div class="testimonial-name">Carl Friedrich Gauss</div>
+              <div class="testimonial-affiliation">1777–1855 · Göttingen</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Ramanujan — goddess Namagiri joke -->
+        <div class="testimonial reveal">
+          <p class="testimonial-quote">
+            The goddess Namagiri still dictates the formulas. The review panel merely checks them.
+          </p>
+          <div class="testimonial-meta">
+            <div class="avatar">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg/200px-Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg"
+                   alt="Srinivasa Ramanujan"
+                   onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
+              <span class="avatar-fallback" style="display:none;">R</span>
+            </div>
+            <div class="testimonial-identity">
+              <div class="testimonial-name">Srinivasa Ramanujan</div>
+              <div class="testimonial-affiliation">1887–1920 · Madras</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Einstein — "God does not play dice" -->
+        <div class="testimonial reveal">
+          <p class="testimonial-quote">
+            God does not play dice. But apparently He does run Lean 4.
+          </p>
+          <div class="testimonial-meta">
+            <div class="avatar">
+              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Albert_Einstein_Head.jpg/200px-Albert_Einstein_Head.jpg"
+                   alt="Albert Einstein"
+                   onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
+              <span class="avatar-fallback" style="display:none;">E</span>
+            </div>
+            <div class="testimonial-identity">
+              <div class="testimonial-name">Albert Einstein</div>
+              <div class="testimonial-affiliation">1879–1955 · Princeton</div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <p class="testimonials-footnote reveal">
+        <span class="mark">※</span>Testimonials from historical mathematicians. All, regrettably, apocryphal — except the first.
       </p>
     </div>
   </section>
