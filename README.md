@@ -78,6 +78,50 @@ See the [`examples/`](examples/) directory for complete sample documents.
 
 ---
 
+## Lean environment setup
+
+Fermat uses [Lean 4](https://leanprover.github.io/lean4/) for formal proof verification. Lean is optional — the LaTeX proof pipeline works without it — but required for the Lean sketch→fill→verify pipeline.
+
+### 1. Install elan (Lean version manager)
+
+```bash
+curl https://elan.lean-lang.org/elan-init.sh -sSf | sh
+```
+
+Restart your shell, then verify:
+
+```bash
+lean --version    # Lean (version 4.x.y, ...)
+elan --version    # elan 4.x.x
+```
+
+elan installs lean to `~/.elan/bin/lean`. Fermat detects this path automatically — no manual configuration needed for basic Lean verification.
+
+### 2. Build the Mathlib cache (for Mathlib support)
+
+Mathlib-backed proofs require a pre-built `.olean` cache (~7 GB). From the repo root:
+
+```bash
+cd lean-workspace
+lake exe cache get    # downloads pre-built Mathlib oleans (~7 GB, one-time)
+```
+
+This takes 10–30 minutes on first run depending on bandwidth. Once done, Fermat detects the cache automatically and enables the **Mathlib mode** toggle in Settings.
+
+> **Lean toolchain:** `lean-workspace/lean-toolchain` pins a specific Lean version for Mathlib compatibility. elan switches to that version automatically when running inside the workspace.
+
+### 3. Configure in Fermat
+
+Open **Settings** (gear icon) → **Lean** tab:
+
+| Setting | Default | Notes |
+|---|---|---|
+| Lean binary path | auto-detected | Leave blank to use `~/.elan/bin/lean`; set an explicit path if using a custom install |
+| Use Mathlib | off | Enable after completing step 2 |
+| Use persistent REPL | off | Keeps Mathlib loaded in memory — eliminates ~30 s cold-start per verification; requires Mathlib mode |
+
+---
+
 ## Distribution build
 
 ```bash
