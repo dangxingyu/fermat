@@ -85,6 +85,8 @@ class LeanRunner {
 
     // Persistent REPL — created lazily when useRepl + mathlib are both enabled
     this._repl = null;
+
+    console.log(`[LeanRunner] Workspace: ${this._workspacePath} | mathlib: ${this._mathlibReady ? 'ready' : 'not found'}`);
   }
 
   // ─── Binary detection ──────────────────────────────────────────────────────
@@ -132,8 +134,10 @@ class LeanRunner {
     this._usesMathlib = !!flag;
     if (flag) {
       this._detectMathlibCache();
+      console.log(`[LeanRunner] Mathlib mode: on | cache=${this._mathlibReady ? 'ready' : 'not found'}`);
       if (this._useRepl && this._mathlibReady) this._ensureRepl();
     } else {
+      console.log('[LeanRunner] Mathlib mode: off');
       this._stopRepl();
     }
   }
@@ -145,8 +149,10 @@ class LeanRunner {
   setUseRepl(flag) {
     this._useRepl = !!flag;
     if (this._useRepl && this._usesMathlib && this._mathlibReady) {
+      console.log('[LeanRunner] REPL mode: on — starting persistent process');
       this._ensureRepl();
     } else if (!this._useRepl) {
+      if (this._repl) console.log('[LeanRunner] REPL mode: off — stopping persistent process');
       this._stopRepl();
     }
   }

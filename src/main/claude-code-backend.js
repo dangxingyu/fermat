@@ -109,6 +109,7 @@ class ClaudeCodeBackend {
     const modelId = resolveModelId(model);
     if (!this._provider || this._provider.apiKey !== apiKey || this._provider.model !== modelId) {
       this._provider = new ClaudeProvider({ apiKey, model: modelId });
+      console.log(`[ClaudeCodeBackend] Provider: ${modelId} (direct API)`);
     }
     return this._provider;
   }

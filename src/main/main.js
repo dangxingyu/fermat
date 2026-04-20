@@ -53,6 +53,7 @@ let completionBackend;
 
 function ensureEngines() {
   if (leanRunner)  return;
+  console.log('[Fermat] Initializing engines…');
   leanRunner    = new LeanRunner();
   // detect() is async (spawns child processes). Called after window loads — see
   // createWindow() — so it never blocks the main event loop during startup.
@@ -61,6 +62,7 @@ function ensureEngines() {
   texCompiler   = new TexCompiler();
   synctexBridge = new SynctexBridge();
   completionBackend = new CompletionBackend();
+  console.log('[Fermat] Engines initialized');
 
   // QA P1-01: attach proof-event forwarders ONCE, not inside createWindow.
   // createWindow used to re-attach these every time, so on macOS each close
@@ -110,6 +112,7 @@ console.warn = (...args) => { origWarn(...args); emitLog('warn', ...args); };
 const isDev = !app.isPackaged;
 
 function createWindow() {
+  console.log(`[Fermat] Creating window (${isDev ? 'dev' : 'prod'})`);
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -163,18 +166,30 @@ function createWindow() {
     const storedCopilot = settingsStore.get('copilot');
     if (storedCopilot) {
       copilotEngine.configure(storedCopilot);
-      const storedLean = storedCopilot.lean || {};
+      const storedLean  = storedCopilot.lean || {};
+      const storedModel = storedCopilot.models?.claude?.model || storedCopilot.defaultModel || '(default)';
       leanRunner.setUsesMathlib(!!storedLean.usesMathlib);
       leanRunner.setUseRepl(!!storedLean.useRepl);
       // Fire lean binary detection asynchronously after window is ready.
       mainWindow.webContents.once('did-finish-load', () => {
         leanRunner.detect(storedLean.binaryPath || undefined)
+          .then(r => {
+            if (r.available) {
+              const ver = r.version?.split('\n')[0] ?? 'unknown';
+              console.log(`[LeanRunner] Detection complete: ${ver} at ${r.path} | mathlib=${leanRunner.mathlibReady ? 'ready' : 'not found'} | mode=${r.mode}`);
+            } else {
+              console.warn(`[LeanRunner] Detection complete: lean not found | mathlib=${leanRunner.mathlibReady ? 'ready' : 'not found'}`);
+            }
+          })
           .catch(err => console.warn('[LeanRunner] Detection error:', err.message));
       });
+      console.log(`[Settings] Restored: model=${storedModel} | maxConcurrent=${storedCopilot.maxConcurrent ?? 3} | verifyMode=${storedCopilot.verificationMode ?? 'off'} | lean.mathlib=${!!storedLean.usesMathlib} | lean.repl=${!!storedLean.useRepl}`);
+    } else {
+      console.log('[Settings] No persisted settings found — using defaults');
     }
     const storedEngine = settingsStore.get('texEngine');
     if (storedEngine) texCompiler.setEngine(storedEngine);
-    console.log('[Settings] Restored persisted settings from disk');
+    console.log('[Settings] Settings applied');
   } catch (err) {
     console.warn('[Settings] Failed to restore settings:', err.message);
   }

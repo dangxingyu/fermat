@@ -65,6 +65,7 @@ class FermatEngine extends EventEmitter {
 
     // Store the latest document content for context assembly
     this._latestContent = '';
+    console.log('[Copilot] Engine initialized');
   }
 
   configure(config) {
@@ -79,11 +80,15 @@ class FermatEngine extends EventEmitter {
     if (this.config.lean && !Number.isFinite(this.config.lean.maxRetries)) {
       this.config.lean.maxRetries = 3;
     }
-    // Re-detect lean binary and mathlib setting when the lean config changes
+    // Re-detect lean binary and mathlib setting when the lean config changes.
+    // detect() is async — fire-and-forget; state is updated as a side effect.
     if (config?.lean !== undefined || config?.verificationMode) {
-      this.leanRunner.detect(this.config.lean?.binaryPath || undefined);
+      this.leanRunner.detect(this.config.lean?.binaryPath || undefined)
+        .catch(err => console.warn('[Copilot] Lean detection error:', err.message));
       this.leanRunner.setUsesMathlib(this.config.lean?.usesMathlib ?? false);
     }
+    const model = this.config.models?.claude?.model || this.config.defaultModel || '(default)';
+    console.log(`[Copilot] Configured: model=${model} | maxConcurrent=${this.config.maxConcurrent} | verifyMode=${this.config.verificationMode ?? 'off'} | lean.mathlib=${!!this.config.lean?.usesMathlib} | lean.repl=${!!this.config.lean?.useRepl}`);
   }
 
   /**

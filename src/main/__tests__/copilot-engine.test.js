@@ -36,7 +36,7 @@ function makeStubBackend() {
 /** A stub LeanRunner that does nothing expensive. */
 function makeStubLeanRunner() {
   return {
-    detect() { return { available: false, path: null, version: null }; },
+    detect() { return Promise.resolve({ available: false, path: null, version: null }); },
     setUsesMathlib() {},
     get isAvailable()  { return false; },
     get binaryPath()   { return null; },

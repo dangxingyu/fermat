@@ -127,6 +127,7 @@ class LeanRepl {
    * Graceful shutdown — closes stdin and waits for the process to exit.
    */
   async stop() {
+    console.log('[LeanRepl] Stopping persistent REPL process');
     this._stopped = true;
     this._ready = false;
 
