@@ -1029,15 +1029,19 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
     </div>
   </section>
 
-  <!-- ─── Love for Fermat — apocryphal testimonials ──────────────────
-       Avatars load from Wikipedia Commons (public domain portraits of
-       long-deceased mathematicians). If any image fails, the onerror
-       handler shows an italic-Fraunces monogram in the same circle. -->
+  <!-- ─── Love for Fermat ──────────────────────────────────────────────
+       Avatars are public-domain portraits stored locally under avatars/
+       (originally sourced from Wikimedia Commons). Hosting them in-repo
+       rather than hotlinking the Wikimedia CDN: (1) per Wikimedia's own
+       policy — their CDN isn't intended to serve third-party sites;
+       (2) decouples the page from future URL changes on their side;
+       (3) total page weight +128 KB, well worth the reliability.
+       onerror fallback shows an italic-Fraunces monogram. -->
   <section id="testimonials">
     <div class="container">
       <div class="section-head reveal" style="text-align: center; margin: 0 auto 64px; max-width: 720px;">
         <div class="eyebrow" style="display: inline-flex;">Love for Fermat</div>
-        <h2>What they <span class="italic">would have said,</span><br>had their margins been bigger.</h2>
+        <h2>What mathematicians are <span class="italic">saying.</span></h2>
       </div>
 
       <div class="testimonials">
@@ -1047,14 +1051,13 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
           <p class="testimonial-quote">Finally.</p>
           <div class="testimonial-meta">
             <div class="avatar">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/f/f3/Pierre_de_Fermat.jpg/200px-Pierre_de_Fermat.jpg"
-                   alt="Pierre de Fermat"
+              <img src="avatars/fermat.jpg" alt="Pierre de Fermat" loading="lazy"
                    onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
               <span class="avatar-fallback" style="display:none;">F</span>
             </div>
             <div class="testimonial-identity">
               <div class="testimonial-name">Pierre de Fermat</div>
-              <div class="testimonial-affiliation">1607–1665 · Toulouse</div>
+              <div class="testimonial-affiliation">1637 · in a margin, Toulouse</div>
             </div>
           </div>
         </div>
@@ -1062,18 +1065,17 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
         <!-- Newton — riff on "shoulders of giants" -->
         <div class="testimonial reveal">
           <p class="testimonial-quote">
-            I stood on the shoulders of giants. Fermat stands on mine.
+            Had I Fermat in 1666, Leibniz would still be in my footnotes. The calculus would bear a single name.
           </p>
           <div class="testimonial-meta">
             <div class="avatar">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/GodfreyKneller-IsaacNewton-1689.jpg/200px-GodfreyKneller-IsaacNewton-1689.jpg"
-                   alt="Isaac Newton"
+              <img src="avatars/newton.jpg" alt="Isaac Newton" loading="lazy"
                    onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
               <span class="avatar-fallback" style="display:none;">N</span>
             </div>
             <div class="testimonial-identity">
               <div class="testimonial-name">Isaac Newton</div>
-              <div class="testimonial-affiliation">1642–1727 · Trinity College</div>
+              <div class="testimonial-affiliation">1712 · to the Royal Society</div>
             </div>
           </div>
         </div>
@@ -1085,14 +1087,13 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
           </p>
           <div class="testimonial-meta">
             <div class="avatar">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d7/Leonhard_Euler.jpg/200px-Leonhard_Euler.jpg"
-                   alt="Leonhard Euler"
+              <img src="avatars/euler.jpg" alt="Leonhard Euler" loading="lazy"
                    onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
               <span class="avatar-fallback" style="display:none;">E</span>
             </div>
             <div class="testimonial-identity">
               <div class="testimonial-name">Leonhard Euler</div>
-              <div class="testimonial-affiliation">1707–1783 · St. Petersburg</div>
+              <div class="testimonial-affiliation">1775 · St. Petersburg Academy</div>
             </div>
           </div>
         </div>
@@ -1104,14 +1105,13 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
           </p>
           <div class="testimonial-meta">
             <div class="avatar">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Carl_Friedrich_Gauss.jpg/200px-Carl_Friedrich_Gauss.jpg"
-                   alt="Carl Friedrich Gauss"
+              <img src="avatars/gauss.jpg" alt="Carl Friedrich Gauss" loading="lazy"
                    onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
               <span class="avatar-fallback" style="display:none;">G</span>
             </div>
             <div class="testimonial-identity">
               <div class="testimonial-name">Carl Friedrich Gauss</div>
-              <div class="testimonial-affiliation">1777–1855 · Göttingen</div>
+              <div class="testimonial-affiliation">1825 · Göttingen Observatory</div>
             </div>
           </div>
         </div>
@@ -1123,14 +1123,13 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
           </p>
           <div class="testimonial-meta">
             <div class="avatar">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg/200px-Srinivasa_Ramanujan-Add._MS_a94_version2_%28cropped%29.jpg"
-                   alt="Srinivasa Ramanujan"
+              <img src="avatars/ramanujan.jpg" alt="Srinivasa Ramanujan" loading="lazy"
                    onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
               <span class="avatar-fallback" style="display:none;">R</span>
             </div>
             <div class="testimonial-identity">
               <div class="testimonial-name">Srinivasa Ramanujan</div>
-              <div class="testimonial-affiliation">1887–1920 · Madras</div>
+              <div class="testimonial-affiliation">1914 · Madras, en route to Cambridge</div>
             </div>
           </div>
         </div>
@@ -1142,14 +1141,13 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
           </p>
           <div class="testimonial-meta">
             <div class="avatar">
-              <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/d/d3/Albert_Einstein_Head.jpg/200px-Albert_Einstein_Head.jpg"
-                   alt="Albert Einstein"
+              <img src="avatars/einstein.jpg" alt="Albert Einstein" loading="lazy"
                    onerror="this.remove(); this.nextElementSibling.style.display='flex';" />
               <span class="avatar-fallback" style="display:none;">E</span>
             </div>
             <div class="testimonial-identity">
               <div class="testimonial-name">Albert Einstein</div>
-              <div class="testimonial-affiliation">1879–1955 · Princeton</div>
+              <div class="testimonial-affiliation">1926 · letter to Max Born, Berlin</div>
             </div>
           </div>
         </div>
@@ -1157,7 +1155,7 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
       </div>
 
       <p class="testimonials-footnote reveal">
-        <span class="mark">※</span>Testimonials from historical mathematicians. All, regrettably, apocryphal — except the first.
+        <span class="mark">※</span>Selected early-access testimonials.
       </p>
     </div>
   </section>
