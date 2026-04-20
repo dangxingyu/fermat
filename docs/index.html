@@ -241,6 +241,99 @@
       color: var(--verdigris);
       margin-left: 0.1em;
       font-style: normal;
+      /* "Lands" onto the headline after the text has appeared, as if
+         the proof just finished writing itself. Respects reduced motion
+         via the global .reveal override below. */
+      opacity: 0;
+      animation: qed-land 0.55s 0.75s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes qed-land {
+      from { opacity: 0; transform: translateY(-0.15em) scale(0.55) rotate(-6deg); }
+      to   { opacity: 1; transform: translateY(-0.15em) scale(1)    rotate(0); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .hero h1 .qed { opacity: 1; animation: none; }
+    }
+
+    /* ─── Fermat's margin — ethos section ────────────────────────────────
+       The quote that gives this tool its name. Set in Fraunces italic at a
+       display size, bracketed by thin rules — the typographic equivalent of
+       someone clearing their throat before reading an epigraph aloud. */
+    .manifesto-section { padding: 80px 0; }
+    .manifesto {
+      text-align: center;
+      max-width: 720px;
+      margin: 0 auto;
+      position: relative;
+    }
+    .manifesto::before,
+    .manifesto::after {
+      content: '';
+      display: block;
+      width: 40px; height: 1px;
+      background: var(--ink-22);
+      margin: 0 auto;
+    }
+    .manifesto::before { margin-bottom: 40px; }
+    .manifesto::after  { margin-top: 40px; }
+
+    .epigraph {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-weight: 400;
+      font-size: clamp(20px, 2.9vw, 30px);
+      line-height: 1.45;
+      letter-spacing: -0.012em;
+      color: var(--ink-83);
+      max-width: 600px;
+      margin: 0 auto 18px;
+      position: relative;
+    }
+    .epigraph::before,
+    .epigraph::after {
+      font-family: var(--font-display);
+      color: var(--ink-40);
+      font-style: normal;
+      font-size: 1.6em;
+      line-height: 0;
+      position: relative;
+      top: 0.3em;
+    }
+    .epigraph::before { content: '\201C'; margin-right: 6px; }
+    .epigraph::after  { content: '\201D'; margin-left:  6px; }
+
+    .attribution {
+      font-family: var(--font-ui);
+      font-size: 13px;
+      font-weight: 400;
+      color: var(--ink-40);
+      letter-spacing: 0.01em;
+      margin-bottom: 44px;
+    }
+    .attribution em { font-style: italic; color: var(--ink-60); }
+
+    .response {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: clamp(22px, 3.2vw, 34px);
+      line-height: 1.25;
+      letter-spacing: -0.015em;
+      color: var(--ink);
+    }
+    .response .italic {
+      font-style: italic;
+      font-weight: 400;
+      color: var(--gold);
+    }
+    .response .year {
+      font-family: var(--font-mono);
+      font-style: normal;
+      font-weight: 400;
+      font-size: 0.55em;
+      color: var(--ink-40);
+      letter-spacing: 0.04em;
+      display: block;
+      margin-bottom: 10px;
     }
 
     .tagline {
@@ -638,7 +731,7 @@
     <div class="nav-links" id="nav-links">
       <a href="#features">Features</a>
       <a href="#how-it-works">How it works</a>
-      <a href="https://github.com/TODO(xingyu)/fermat">GitHub</a><!-- TODO(xingyu): fill repo URL -->
+      <a href="https://github.com/dangxingyu/fermat">GitHub</a>
       <a href="#waitlist" class="btn btn-pill">Early access</a>
     </div>
     <button class="nav-hamburger" id="hamburger" aria-label="Toggle menu">≡</button>
@@ -659,12 +752,11 @@
         and — when you want certainty — formally verifies them in Lean&nbsp;4.
       </p>
       <div class="hero-actions">
-        <!-- TODO(xingyu): replace hrefs with actual GitHub release URLs -->
-        <a class="btn btn-primary" href="https://github.com/TODO(xingyu)/fermat/releases">
+        <a class="btn btn-primary" href="https://github.com/dangxingyu/fermat/releases">
           Download for macOS
           <span aria-hidden="true">→</span>
         </a>
-        <a class="btn btn-ghost" href="https://github.com/TODO(xingyu)/fermat">
+        <a class="btn btn-ghost" href="https://github.com/dangxingyu/fermat">
           View on GitHub
         </a>
       </div>
@@ -672,8 +764,29 @@
     </div>
   </section>
 
+  <!-- ─── Fermat's margin — the ethos ──────────────────────────────── -->
+  <!-- The 1637 margin note of Pierre de Fermat — the reason this tool
+       has its name. Placed between the hero and the screenshot so the
+       product below feels like a direct answer to the quote above. -->
+  <section class="manifesto-section">
+    <div class="container manifesto reveal">
+      <p class="epigraph">
+        Cuius rei demonstrationem mirabilem sane detexi,<br>
+        hanc marginis exiguitas non caperet.
+      </p>
+      <p class="attribution">
+        — Pierre de Fermat, 1637, in the margin of Diophantus's <em>Arithmetica</em>
+      </p>
+      <p class="response">
+        <span class="year">MDCXXXVII&nbsp;&nbsp;·&nbsp;&nbsp;MMXXVI</span>
+        Three hundred and eighty-nine years later,<br>
+        <span class="italic">the margin is large enough.</span>
+      </p>
+    </div>
+  </section>
+
   <!-- ─── Screenshot ───────────────────────────────────────────────── -->
-  <div class="screenshot-wrap reveal" style="margin-top: -40px; margin-bottom: 40px;">
+  <div class="screenshot-wrap reveal" style="margin-bottom: 40px;">
     <div class="screenshot-frame">
       <div class="screenshot-bar">
         <span class="dot dot-red"></span>
@@ -827,9 +940,9 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
         <span>Fermat — <em>ad marginem non amplius</em></span>
       </div>
       <div class="footer-links">
-        <a href="https://github.com/TODO(xingyu)/fermat">GitHub</a><!-- TODO(xingyu): fill -->
-        <a href="https://github.com/TODO(xingyu)/fermat/releases">Releases</a><!-- TODO(xingyu): fill -->
-        <a href="https://github.com/TODO(xingyu)/fermat/issues">Issues</a><!-- TODO(xingyu): fill -->
+        <a href="https://github.com/dangxingyu/fermat">GitHub</a>
+        <a href="https://github.com/dangxingyu/fermat/releases">Releases</a>
+        <a href="https://github.com/dangxingyu/fermat/issues">Issues</a>
         <a href="#waitlist">Waitlist</a>
       </div>
     </div>
