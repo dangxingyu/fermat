@@ -1,8 +1,8 @@
 # Fermat — Lean Pipeline Architecture Audit & Optimization Design
 
-**Date:** 2026-04-19
+**Date:** 2026-04-20 (updated from 2026-04-19)
 **Author:** Claude (reading audit, no code changes)
-**Scope:** `lean-workspace/`, `src/main/lean-runner.js`, the `_leanSketchFillVerify` pipeline in `src/main/claude-code-backend.js`, and the prompt templates / parsers that feed it.
+**Scope:** `lean-workspace/`, `src/main/lean-runner.js`, `src/main/claude-code-backend.js` (all of `_leanSketchFillVerify` + every prompt builder), `.claude/skills/fermat-{sketch,prove,verify}/SKILL.md`, `src/main/context-assembler.js`
 
 ---
 
@@ -254,6 +254,104 @@ The parser throws away location nesting, error kind (type mismatch vs unsolved g
 | R-5 | Alternatively, start a long-lived `lean --server` and speak LSP directly. Heavier lift (20 methods, state tracking), but gets completion + code actions for free. Pick this over REPL if we also want in-editor LSP for the Lean side-panel. | L | Very high |
 | R-6 | After R-1 lands: pool of N repl workers, each with mathlib prelude pre-loaded, assigned round-robin. Eliminates cold-start per verify. | S (post R-1) | High |
 | R-7 | Extend `LeanError` to carry `kind` (type-mismatch / unsolved / syntax / name-not-found) inferred from message prefix, and `relatedLocations[]` for `at definition` refs. Enables smarter diagnose prompts ("the error is a name-not-found — try `exact?`"). | S | Medium |
+
+---
+
+## 3b. Prompt Engineering Review (added 2026-04-20)
+
+This section analyses the full prompt stack — `LEAN_SYS`, the three prompt builders, and the three skill SKILL.md files — as a cohesive engineering unit.
+
+### 3b.1 The skill files are LaTeX-centric; the Lean path is zero-shot
+
+The three skills (`fermat-sketch`, `fermat-prove`, `fermat-verify`) are sophisticated, detailed documents covering LaTeX proof strategy, theory-map reading, dependency hygiene, and LaTeX self-checking. They are entirely unaware that a Lean formalization phase exists.
+
+When `_leanSketchFillVerify` runs, none of these skills are loaded. The system prompt shrinks to one sentence (`LEAN_SYS`, [l.270](src/main/claude-code-backend.js:270)). Everything that makes the LaTeX phase high-quality — the rich SKILL.md priming, the theory-map semantics, the "check prerequisites" instructions — is absent from the Lean phase. The Lean phase is a naked zero-shot invocation.
+
+**Consequence:** A proof that passed `fermat-prove` with a nuanced multi-step structure gets handed to the Lean sketch builder with no guidance about the structure that was just produced, no instruction about the proof technique that succeeded, and no Lean-specific guidance.
+
+**Fix:** Create a `fermat-lean-sketch` SKILL.md analogous to `fermat-sketch` but targeting Lean 4. It should:
+- Explain the sketch→fill→sorrify structure from a Lean perspective
+- List the tactic families available in Mathlib (see §3b.3)
+- Specify how to annotate sorries with `show T; sorry`
+- Include 1–2 concrete examples of a natural proof → Lean skeleton
+
+### 3b.2 Lean 3 vs Lean 4 confusion patterns
+
+Claude was trained on substantial Lean 3 data (Mathlib3, older tutorials). These Lean 3 patterns appear in generated code and cause `lean` errors that consume retry budget:
+
+| Lean 3 (wrong) | Lean 4 (correct) | Error seen |
+|---|---|---|
+| `begin ... end` | `by ...` | `unexpected token` |
+| `nat.prime` | `Nat.Prime` | `unknown identifier` |
+| `h.1` / `h.2` for `And` | `h.left` / `h.right` | `type mismatch` |
+| `ring'` | `ring` | `unknown tactic` |
+| `funext h,` (with comma) | `funext h` or `funext (h)` | `syntax error` |
+| `cases h with \| inl h => ... \| inr h => ...` (but wrong pipe) | `rcases h with h \| h` | `syntax error` |
+| `exact ⟨h₁, h₂⟩.1` | `exact (And.intro h₁ h₂).left` | confusing elaboration error |
+| `#check` inside tactic block | `#check` is top-level only | `unexpected term` |
+
+None of these patterns are mentioned in any current prompt. A 10-line "Lean 3 pitfalls to avoid" section in `LEAN_SYS` would eliminate a meaningful fraction of first-attempt failures.
+
+### 3b.3 Missing tactic hierarchy guidance
+
+Lean 4 with Mathlib has a well-known tactic decision tree. For a given goal shape, there is a "try-first" tactic that succeeds most of the time. Claude is not told this:
+
+| Goal type | Try first | Then |
+|-----------|-----------|------|
+| Linear arithmetic over `ℤ`/`ℕ` | `omega` | `linarith` |
+| Ring/field identities | `ring` | `field_simp; ring` |
+| Decidable numerical facts | `norm_num` | `decide` |
+| Propositional tautology | `tauto` | `aesop` |
+| Existential with explicit witness | `exact ⟨w, h⟩` | `refine ⟨?_, ?_⟩` |
+| Membership in finite set | `simp [Finset.mem_insert, ...]` | `decide` |
+| Structural induction | `induction n with` | `Nat.rec` term-mode |
+| Bounded cases | `fin_cases` | `interval_cases` |
+
+Including this table (or a briefer version) in `LEAN_SYS` would give Claude a lookup mechanism, reducing the "try `simp` on everything" failure pattern.
+
+### 3b.4 The sketch→fill disconnect
+
+The sketch phase produces code like:
+```lean
+theorem inf_primes : ∀ n : ℕ, ∃ p > n, Nat.Prime p := by
+  intro n
+  show ∃ p > n, Nat.Prime p; sorry
+```
+
+The fill phase receives `_buildFillPrompt` with:
+- `currentCode` — the full sketch ✓
+- `sorry.surroundingCode` — ±5 lines around the sorry ✓
+- `sorry.expectedType` — `∃ p > n, Nat.Prime p` (if annotated) ✓ / null (if not) ✗
+- `naturalProof` — the LaTeX proof from `results.proof` ✓
+- `contextPrompt.slice(0, 800)` — the first 800 chars of LaTeX XML ✗✗✗
+
+The `contextPrompt.slice(0, 800)` is the most damaging item. The context built by `ContextAssembler.formatAsPrompt()` starts with `<preamble>` (LaTeX packages) — so 800 chars covers the `\documentclass`, a few `\usepackage` lines, and nothing else. The theorem statement, theory map, and all direct dependencies are absent from every fill prompt. This was presumably a token-budget precaution that predates current 200k-token context windows. It should be removed or replaced with a lean-relevant excerpt.
+
+The `naturalProof` (LaTeX proof text) is included in full. This is mathematically valuable guidance but notionally foreign: "by Euclid's lemma" doesn't help Claude write `Nat.Prime.dvd_mul`. A **Lean-reformulation step** — one additional `_callLlm` before the sketch that asks Claude to restate the theorem and key lemmas in Lean terms — would convert the LaTeX mathematical context into directly actionable Lean guidance.
+
+### 3b.5 Easy/Hard proof strategy: no distinction
+
+The LaTeX prove skill carefully calibrates output length by difficulty (Easy: 3–8 lines; Hard: 20+). The Lean phase makes no such calibration. Every theorem goes through full sketch→fill→verify regardless of whether the Lean proof is `by norm_num` (1 line) or a 50-line induction.
+
+An obvious win: before the sketch phase, add a "classify Lean difficulty" prompt that produces one of:
+- `trivial` → attempt `by decide`/`norm_num`/`ring`/`omega` directly (no sketch needed)
+- `tactic` → standard sketch→fill pipeline
+- `structural` → sketch→fill with induction/recursion guidance
+
+Trivial proofs currently waste 3–6 API calls going through sketch→fill when a 1-call `by norm_num` attempt would succeed. A rough classifier (even a keyword heuristic on the natural proof text) would save this.
+
+### 3b.6 Summary of prompt engineering gaps
+
+| Gap | Severity | Quick or Medium fix |
+|-----|----------|---------------------|
+| Zero-shot Lean system prompt (1 sentence) | Critical | Q: expand LEAN_SYS |
+| No Lean 3 vs Lean 4 syntax guards | High | Q: add to LEAN_SYS |
+| No tactic hierarchy guidance | High | Q: add to LEAN_SYS |
+| `contextPrompt.slice(0, 800)` in fill/diagnose | Critical | Q: remove truncation |
+| No few-shot Lean examples in any prompt | High | S: add 1–2 examples |
+| No Lean-specific skill file | High | M: create fermat-lean-sketch SKILL.md |
+| No Lean-reformulation step | Medium | M: add pre-sketch LLM call |
+| No easy/hard proof strategy split | Medium | M: add classifier |
 
 ---
 
