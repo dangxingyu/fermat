@@ -84,6 +84,13 @@ function ensureEngines() {
 // Renderer reports its dirty state here so the close handler can decide.
 let isDirtyInRenderer = false;
 
+// Tracks the binary path used for the most recent leanRunner.detect() call.
+// The did-finish-load handler sets this after the startup detection; the
+// copilot:configure handler compares against it so duplicate detections are
+// skipped when the renderer re-applies unchanged settings on mount.
+// undefined = detection hasn't run yet.
+let lastDetectedLeanPath = undefined;
+
 // ─── Log forwarding: tee main-process console output to renderer ───
 const logBuffer = []; // keep last N entries so late subscribers can catch up
 const MAX_LOG_BUFFER = 500;
@@ -170,9 +177,14 @@ function createWindow() {
       const storedModel = storedCopilot.models?.claude?.model || storedCopilot.defaultModel || '(default)';
       leanRunner.setUsesMathlib(!!storedLean.usesMathlib);
       leanRunner.setUseRepl(!!storedLean.useRepl);
-      // Fire lean binary detection asynchronously after window is ready.
+      // Single canonical startup detection — runs once after the renderer has
+      // painted. Setting lastDetectedLeanPath here prevents copilot:configure
+      // from re-running detect() when the renderer re-applies the same saved
+      // settings on mount.
       mainWindow.webContents.once('did-finish-load', () => {
-        leanRunner.detect(storedLean.binaryPath || undefined)
+        const startupPath = storedLean.binaryPath || '';
+        lastDetectedLeanPath = startupPath;
+        leanRunner.detect(startupPath || undefined)
           .then(r => {
             if (r.available) {
               const ver = r.version?.split('\n')[0] ?? 'unknown';
@@ -489,11 +501,18 @@ ipcMain.handle('copilot:configure', async (_event, config) => {
   } else {
     console.log('[Copilot] Configured WITHOUT Claude API key — will rely on Claude CLI if installed');
   }
-  // Re-detect lean binary whenever settings change (user may have updated leanPath).
-  // detect() is async — fire and forget; the result is visible via lean:get-path.
+  // Re-detect only when the lean binary path actually changed from the last
+  // known detection.  This prevents double-detection at startup: the
+  // did-finish-load callback runs detection and sets lastDetectedLeanPath;
+  // if the renderer then re-applies the same stored settings (unchanged path),
+  // the comparison below is equal and we skip the redundant call.
   if (config?.lean?.binaryPath !== undefined) {
-    leanRunner.detect(config.lean.binaryPath || undefined)
-      .catch(err => console.warn('[LeanRunner] Detection error:', err.message));
+    const newPath = config.lean.binaryPath || '';
+    if (newPath !== lastDetectedLeanPath) {
+      lastDetectedLeanPath = newPath;
+      leanRunner.detect(newPath || undefined)
+        .catch(err => console.warn('[LeanRunner] Detection error:', err.message));
+    }
   }
   if (config?.lean?.usesMathlib !== undefined) {
     leanRunner.setUsesMathlib(!!config.lean.usesMathlib);

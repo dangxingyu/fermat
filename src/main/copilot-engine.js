@@ -80,11 +80,12 @@ class FermatEngine extends EventEmitter {
     if (this.config.lean && !Number.isFinite(this.config.lean.maxRetries)) {
       this.config.lean.maxRetries = 3;
     }
-    // Re-detect lean binary and mathlib setting when the lean config changes.
-    // detect() is async — fire-and-forget; state is updated as a side effect.
-    if (config?.lean !== undefined || config?.verificationMode) {
-      this.leanRunner.detect(this.config.lean?.binaryPath || undefined)
-        .catch(err => console.warn('[Copilot] Lean detection error:', err.message));
+    // Propagate mathlib flag to the runner whenever it changes.
+    // Binary detection (detect()) is NOT triggered here — that is main.js's
+    // responsibility so it can deduplicate across startup and user-initiated
+    // saves.  Calling detect() from here produced three back-to-back
+    // invocations at startup (settings-restore + did-finish-load + handler).
+    if (config?.lean !== undefined) {
       this.leanRunner.setUsesMathlib(this.config.lean?.usesMathlib ?? false);
     }
     const model = this.config.models?.claude?.model || this.config.defaultModel || '(default)';
