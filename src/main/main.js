@@ -273,6 +273,12 @@ function createWindow() {
           click: () => mainWindow?.webContents.send('menu:save-as'),
         },
         { type: 'separator' },
+        {
+          label: 'Close Tab',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => mainWindow?.webContents.send('menu:close-tab'),
+        },
+        { type: 'separator' },
         // On macOS the Quit item lives in the app menu above; on Windows/Linux add it here.
         ...(process.platform !== 'darwin' ? [{ role: 'quit' }] : []),
       ],
@@ -626,6 +632,20 @@ ipcMain.on('window:set-dirty', (_event, dirty) => {
 
 // U-03: async confirmation dialog — replaces window.confirm() which blocks
 // the renderer event loop.
+ipcMain.handle('window:confirm-close-tab', async (_event, fileName) => {
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    buttons: ['Save', "Don't Save", 'Cancel'],
+    defaultId: 0,
+    cancelId: 2,
+    message: `Do you want to save the changes you made to "${fileName}"?`,
+    detail: 'Your changes will be lost if you don\'t save them.',
+  });
+  if (response === 0) return 'save';
+  if (response === 1) return 'discard';
+  return 'cancel';
+});
+
 ipcMain.handle('window:confirm-discard', async () => {
   const { response } = await dialog.showMessageBox(mainWindow, {
     type: 'question',

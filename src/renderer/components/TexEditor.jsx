@@ -53,12 +53,29 @@ function ensureLanguageRegistered() {
  * - [PROVE IT: X] marker decorations
  * - Auto-completion, bracket pairing, environment closing
  * - Keyboard shortcuts
+ * - VS Code-style model-per-tab: each tab gets its own ITextModel so undo/redo
+ *   history is independent per file. App.jsx manages tab state; TexEditor
+ *   manages Monaco model lifecycle.
+ *
+ * Tab model API (exposed on editorRef.current):
+ *   _createTabModel(tabId, content)  — create a Monaco model for a new tab
+ *   _destroyTabModel(tabId)          — dispose a model when its tab is closed
+ *   _setTabContent(tabId, content)   — replace a model's content (file reload)
  */
-export default function TexEditor({ content, onChange, editorRef, proofTasks, onForwardSearch, onSave, onCompile }) {
+export default function TexEditor({ content, onChange, editorRef, activeTabId, proofTasks, onForwardSearch, onSave, onCompile }) {
   const containerRef = useRef(null);
   const editorInstanceRef = useRef(null);
   const decorationsRef = useRef([]);
   const [error, setError] = useState(null);
+
+  // Per-tab Monaco models and saved view states (cursor + scroll position).
+  const tabModelsRef     = useRef(new Map()); // tabId → ITextModel
+  const tabViewStatesRef = useRef(new Map()); // tabId → IViewState
+
+  // Track current activeTabId in a ref so the init effect (which runs once)
+  // can register the initial model under the correct tabId.
+  const activeTabIdRef = useRef(activeTabId);
+  useEffect(() => { activeTabIdRef.current = activeTabId; }, [activeTabId]);
 
   // Bridge latest callbacks into stable refs so Monaco's command handlers
   // (registered once) always see the current React state (filePath etc.).
@@ -113,6 +130,39 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
       });
 
       editorInstanceRef.current = editor;
+
+      // Register the initial Monaco model (created by monaco.editor.create)
+      // under the current active tab so we can switch back to it later.
+      const initialModel = editor.getModel();
+      tabModelsRef.current.set(activeTabIdRef.current, initialModel);
+
+      // ─── Tab model management API ───────────────────────────────────
+      // App.jsx calls these before switching activeTabId so the model exists
+      // in tabModelsRef by the time the activeTabId useEffect fires.
+
+      editor._createTabModel = (tabId, initialContent) => {
+        if (tabModelsRef.current.has(tabId)) return; // already exists
+        const model = monaco.editor.createModel(initialContent || '', 'latex');
+        tabModelsRef.current.set(tabId, model);
+      };
+
+      editor._destroyTabModel = (tabId) => {
+        const model = tabModelsRef.current.get(tabId);
+        if (model) {
+          model.dispose();
+          tabModelsRef.current.delete(tabId);
+        }
+        tabViewStatesRef.current.delete(tabId);
+      };
+
+      // Replace a model's content (e.g., file reload into existing tab).
+      // Uses model.setValue so the change is tracked in Monaco's undo stack
+      // for that model (it does clear the stack, which is expected for a fresh load).
+      editor._setTabContent = (tabId, newContent) => {
+        const model = tabModelsRef.current.get(tabId);
+        if (model) model.setValue(newContent);
+      };
+
       if (editorRef) editorRef.current = editor;
 
       // Register LaTeX completions
@@ -127,7 +177,8 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
         inlineDispose = registerInlineCompletions(monaco, 'latex');
       }
 
-      // Content change handler
+      // Content change handler — fires only for the active model (editor-level,
+      // not model-level, so it follows setModel automatically).
       const contentDisposable = editor.onDidChangeModelContent(() => {
         onChange(editor.getValue());
       });
@@ -203,6 +254,15 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
         resizeObserver.disconnect();
         contentDisposable.dispose();
         completionDisposables.forEach(d => d.dispose());
+        // Dispose all per-tab models we created (not the initial one — Monaco
+        // disposes that when the editor is disposed).
+        for (const [tabId, model] of tabModelsRef.current) {
+          if (tabId !== activeTabIdRef.current) {
+            model.dispose();
+          }
+        }
+        tabModelsRef.current.clear();
+        tabViewStatesRef.current.clear();
         editor.dispose();
         editorInstanceRef.current = null;
       };
@@ -212,12 +272,41 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
     }
   }, []); // Only init once
 
-  // ─── Sync external content changes ───
+  // ─── Switch Monaco model when the active tab changes ─────────────────────
+  // Save the departing tab's view state (cursor + scroll), then switch the
+  // editor to the new tab's model and restore its saved view state.
   useEffect(() => {
     const editor = editorInstanceRef.current;
-    if (editor && editor.getValue() !== content) {
+    if (!editor) return;
+
+    const prevTabId = activeTabIdRef.current;
+    const nextTabId = activeTabId;
+
+    if (prevTabId !== nextTabId) {
+      // Save the outgoing tab's view state so we can restore it on return.
+      tabViewStatesRef.current.set(prevTabId, editor.saveViewState());
+      activeTabIdRef.current = nextTabId;
+    }
+
+    const model = tabModelsRef.current.get(nextTabId);
+    if (model && editor.getModel() !== model) {
+      editor.setModel(model);
+      const vs = tabViewStatesRef.current.get(nextTabId);
+      if (vs) editor.restoreViewState(vs);
+    }
+  }, [activeTabId]);
+
+  // ─── Sync external content into the active model ─────────────────────────
+  // This catches programmatic updates (proof insertion, handleNew clearing
+  // content) that go through App's setTabs without calling _setTabContent.
+  // The check `model.getValue() !== content` makes it a no-op for user typing.
+  useEffect(() => {
+    const editor = editorInstanceRef.current;
+    if (!editor) return;
+    const model = editor.getModel();
+    if (model && model.getValue() !== content) {
       const position = editor.getPosition();
-      editor.setValue(content);
+      model.setValue(content);
       if (position) editor.setPosition(position);
     }
   }, [content]);

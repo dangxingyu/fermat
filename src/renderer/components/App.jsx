@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Toolbar from './Toolbar';
+import TabBar from './TabBar';
 import TheoryOutline from './TheoryOutline';
 import TexEditor from './TexEditor';
 import PdfViewer from './PdfViewer';
@@ -150,45 +151,67 @@ $\\sqrt{2}$ is irrational. This follows from Theorem~\\ref{thm:fta}.
 
 \\end{document}`;
 
+// ─── Tab ID counter ──────────────────────────────────────────────────────────
+let _tabCounter = 1;
+function newTabId() { return `tab-${Date.now()}-${_tabCounter++}`; }
+function newUntitledName(tabs) {
+  const nums = tabs
+    .filter(t => !t.filePath)
+    .map(t => { const m = t.fileName.match(/^Untitled-?(\d*)$/); return m ? (parseInt(m[1] || '1', 10)) : 0; })
+    .filter(n => n > 0);
+  const next = nums.length === 0 ? 1 : Math.max(...nums) + 1;
+  return `Untitled-${next}`;
+}
+
 export default function App() {
-  const [content, setContent] = useState(SAMPLE_TEX);
-  const [isDirty, setIsDirty] = useState(false);
-  const [filePath, setFilePath] = useState(null);
+  // ─── Multi-tab state ─────────────────────────────────────────────────────
+  // Each tab: { id, filePath, fileName, content, isDirty }
+  const initialTabId = newTabId();
+  const [tabs, setTabs] = useState([{
+    id: initialTabId,
+    filePath: null,
+    fileName: 'Untitled-1',
+    content: SAMPLE_TEX,
+    isDirty: false,
+  }]);
+  const [activeTabId, setActiveTabId] = useState(initialTabId);
+
+  // Derived: the active tab object
+  const activeTab = tabs.find(t => t.id === activeTabId) || tabs[0];
+
+  // ─── Other UI state ──────────────────────────────────────────────────────
   const [folderPath, setFolderPath] = useState(null);
-  const [folderFiles, setFolderFiles] = useState([]); // [{ name, path }]
+  const [folderFiles, setFolderFiles] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [showOutline, setShowOutline] = useState(true);
   const [showPdf, setShowPdf] = useState(true);
   const [showReviewPanel, setShowReviewPanel] = useState(true);
   const [showLog, setShowLog] = useState(false);
-  // U-02: loading state while opening a file / folder — disables file menu
-  // actions and lets the UI show a spinner instead of appearing frozen.
   const [fileLoading, setFileLoading] = useState(false);
   const editorRef = useRef(null);
   const editorAreaRef = useRef(null);
-  // Bridges ordering: useCopilot needs the callback; it's defined below.
   const handleAutoInlineRef = useRef(null);
 
-  // ─── Editor content change — marks document dirty ───────────────────
+  // ─── Editor content change — marks active tab dirty ─────────────────────
   const handleContentChange = useCallback((newContent) => {
-    setContent(newContent);
-    setIsDirty(true);
+    setTabs(prev => prev.map(t =>
+      t.id === activeTabId ? { ...t, content: newContent, isDirty: true } : t
+    ));
+  }, [activeTabId]);
+
+  // ─── Confirm before closing a dirty tab ──────────────────────────────────
+  // Returns 'save' | 'discard' | 'cancel'
+  const confirmCloseTab = useCallback(async (fileName) => {
+    if (window.api?.window?.confirmCloseTab) {
+      return await window.api.window.confirmCloseTab(fileName);
+    }
+    // Fallback for dev reload without IPC
+    const save = window.confirm(`Save "${fileName}" before closing?`);
+    return save ? 'save' : 'discard';
   }, []);
 
-  // ─── Confirm before discarding unsaved changes ───────────────────────
-  // U-03: use the main-process native dialog via IPC so we don't block the
-  // renderer's event loop with window.confirm(). Falls back to window.confirm
-  // in the unlikely case the IPC bridge isn't wired (e.g. dev refresh).
-  const confirmDiscard = useCallback(async () => {
-    if (!isDirty) return true;
-    if (window.api?.window?.confirmDiscard) {
-      return await window.api.window.confirmDiscard();
-    }
-    return window.confirm('You have unsaved changes. Discard them and continue?');
-  }, [isDirty]);
-
-  // ─── Resizable split pane (editor ↔ PDF) ───
-  const [editorFlex, setEditorFlex] = useState(50); // percentage for editor
+  // ─── Resizable split pane (editor ↔ PDF) ────────────────────────────────
+  const [editorFlex, setEditorFlex] = useState(50);
   const draggingRef = useRef(false);
 
   const handleResizerMouseDown = useCallback((e) => {
@@ -214,8 +237,8 @@ export default function App() {
     document.addEventListener('mouseup', onMouseUp);
   }, []);
 
-  // ─── Resizable outline sidebar ───
-  const [outlineWidth, setOutlineWidth] = useState(280); // px
+  // ─── Resizable outline sidebar ───────────────────────────────────────────
+  const [outlineWidth, setOutlineWidth] = useState(280);
   const mainContentRef = useRef(null);
   const outlineDraggingRef = useRef(false);
 
@@ -243,19 +266,17 @@ export default function App() {
   }, []);
 
   // SyncTeX state
-  const synctexRef = useRef(null); // { synctexPath, texPath }
+  const synctexRef = useRef(null);
   const [forwardHighlight, setForwardHighlight] = useState(null);
 
-  // ─── Right-panel tab: 'pdf' | 'lean' ─────────────────────────────────────
+  // ─── Right-panel tab: 'pdf' | 'lean' ────────────────────────────────────
   const [rightTab, setRightTab] = useState('pdf');
 
-  // ─── Lean verification state ──────────────────────────────────────────────
-  // Accumulates output lines live; reset when a new proof task starts lean phase.
+  // ─── Lean verification state ─────────────────────────────────────────────
   const [leanState, setLeanState] = useState(null);
   const leanOutputLinesRef = useRef([]);
 
-  // ─── Auto-update state ────────────────────────────────────────────
-  // 'idle' | 'available' | 'downloading' | 'ready'
+  // ─── Auto-update state ───────────────────────────────────────────────────
   const [updateState, setUpdateState] = useState({ phase: 'idle', version: null, percent: null });
 
   useEffect(() => {
@@ -272,7 +293,7 @@ export default function App() {
     return () => { offAvailable?.(); offProgress?.(); offDownloaded?.(); };
   }, []);
 
-  const { outline, refreshOutline } = useOutline(content);
+  const { outline, refreshOutline } = useOutline(activeTab?.content || '');
   const {
     proofTasks,
     pendingReviews,
@@ -286,35 +307,103 @@ export default function App() {
     onAutoInline: (data) => handleAutoInlineRef.current?.(data),
   });
 
-  // Refresh outline when content changes (debounced)
-  // Also keep the copilot backend's content in sync
+  // Refresh outline when active tab content changes; keep copilot in sync
   useEffect(() => {
     const timer = setTimeout(() => {
       refreshOutline();
-      window.api?.copilot?.updateContent(content);
+      window.api?.copilot?.updateContent(activeTab?.content || '');
     }, 500);
     return () => clearTimeout(timer);
-  }, [content, refreshOutline]);
+  }, [activeTab?.content, refreshOutline]);
+
+  // ─── Tab operations ──────────────────────────────────────────────────────
+
+  /** Create a new empty tab and switch to it. */
+  const handleNew = useCallback(() => {
+    const id = newTabId();
+    const fileName = newUntitledName(tabs);
+    // Create the Monaco model before the tab switch so it's ready in tabModels.
+    editorRef.current?._createTabModel(id, '');
+    setTabs(prev => [...prev, { id, filePath: null, fileName, content: '', isDirty: false }]);
+    setActiveTabId(id);
+  }, [tabs]);
+
+  /** Switch to a tab. TexEditor handles the Monaco model switch reactively. */
+  const handleSelectTab = useCallback((tabId) => {
+    setActiveTabId(tabId);
+  }, []);
+
+  /** Close a tab (with dirty check). */
+  const handleCloseTab = useCallback(async (tabId) => {
+    const tab = tabs.find(t => t.id === tabId);
+    if (!tab) return;
+
+    if (tab.isDirty) {
+      const action = await confirmCloseTab(tab.fileName);
+      if (action === 'cancel') return;
+      if (action === 'save') {
+        const savedPath = await window.api?.file.save({ filePath: tab.filePath, content: tab.content });
+        if (!savedPath) return; // user cancelled the save dialog
+        // Update tab in place before removing
+        setTabs(prev => prev.map(t =>
+          t.id === tabId ? { ...t, filePath: savedPath, fileName: savedPath.split('/').pop(), isDirty: false } : t
+        ));
+      }
+    }
+
+    // Destroy the Monaco model for the closing tab
+    editorRef.current?._destroyTabModel(tabId);
+
+    setTabs(prev => {
+      const next = prev.filter(t => t.id !== tabId);
+      if (next.length === 0) {
+        // Never leave zero tabs — create a fresh untitled tab
+        const freshId = newTabId();
+        editorRef.current?._createTabModel(freshId, '');
+        const freshTab = { id: freshId, filePath: null, fileName: 'Untitled-1', content: '', isDirty: false };
+        // Update activeTabId synchronously via a deferred call to avoid
+        // setting state inside another setState callback.
+        Promise.resolve().then(() => setActiveTabId(freshId));
+        return [freshTab];
+      }
+      // Switch to adjacent tab if we closed the active one
+      if (activeTabId === tabId) {
+        const idx = prev.findIndex(t => t.id === tabId);
+        const newActive = next[Math.min(idx, next.length - 1)];
+        Promise.resolve().then(() => setActiveTabId(newActive.id));
+      }
+      return next;
+    });
+  }, [tabs, activeTabId, confirmCloseTab]);
+
+  // ─── File operations ─────────────────────────────────────────────────────
 
   const handleOpen = useCallback(async () => {
     if (!window.api) return;
-    if (!(await confirmDiscard())) return;
     setFileLoading(true);
     try {
       const result = await window.api.file.open();
-      if (result) {
-        setContent(result.content);
-        setFilePath(result.filePath);
-        setIsDirty(false);
+      if (!result) return;
+
+      // If this file is already open in another tab, just switch to it
+      const existing = tabs.find(t => t.filePath === result.filePath);
+      if (existing) {
+        setActiveTabId(existing.id);
+        return;
       }
+
+      const id = newTabId();
+      const fileName = result.filePath.split('/').pop();
+      editorRef.current?._createTabModel(id, result.content);
+      setTabs(prev => [...prev, { id, filePath: result.filePath, fileName, content: result.content, isDirty: false }]);
+      setActiveTabId(id);
     } finally {
       setFileLoading(false);
     }
-  }, [confirmDiscard]);
+  }, [tabs]);
 
   const handleOpenFolder = useCallback(async () => {
     if (!window.api) return;
-    if (!(await confirmDiscard())) return;
     setFileLoading(true);
     try {
       const result = await window.api.file.openFolder();
@@ -325,69 +414,71 @@ export default function App() {
       const firstTex = (result.files || []).find(f => /\.tex$/i.test(f.name));
       if (firstTex) {
         const fileContent = await window.api.file.read(firstTex.path);
-        setContent(fileContent);
-        setFilePath(firstTex.path);
-        setIsDirty(false);
+        const id = newTabId();
+        const fileName = firstTex.name;
+        editorRef.current?._createTabModel(id, fileContent);
+        setTabs(prev => [...prev, { id, filePath: firstTex.path, fileName, content: fileContent, isDirty: false }]);
+        setActiveTabId(id);
       }
     } finally {
       setFileLoading(false);
     }
-  }, [confirmDiscard]);
+  }, []);
 
   const handleSelectFile = useCallback(async (file) => {
     if (!window.api) return;
-    if (!(await confirmDiscard())) return;
+
+    // Reuse existing tab if the file is already open
+    const existing = tabs.find(t => t.filePath === file.path);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+
     setFileLoading(true);
     try {
       const fileContent = await window.api.file.read(file.path);
-      setContent(fileContent);
-      setFilePath(file.path);
-      setIsDirty(false);
+      const id = newTabId();
+      editorRef.current?._createTabModel(id, fileContent);
+      setTabs(prev => [...prev, { id, filePath: file.path, fileName: file.name, content: fileContent, isDirty: false }]);
+      setActiveTabId(id);
     } finally {
       setFileLoading(false);
     }
-  }, [confirmDiscard]);
+  }, [tabs]);
 
   const handleSave = useCallback(async () => {
-    if (!window.api) return null;
-    const savedPath = await window.api.file.save({ filePath, content });
+    if (!window.api || !activeTab) return null;
+    const savedPath = await window.api.file.save({ filePath: activeTab.filePath, content: activeTab.content });
     if (savedPath) {
-      setFilePath(savedPath);
-      setIsDirty(false);
+      setTabs(prev => prev.map(t =>
+        t.id === activeTabId ? { ...t, filePath: savedPath, fileName: savedPath.split('/').pop(), isDirty: false } : t
+      ));
     }
     return savedPath;
-  }, [filePath, content]);
+  }, [activeTab, activeTabId]);
 
   const handleSaveAs = useCallback(async () => {
-    if (!window.api) return null;
-    const savedPath = await window.api.file.saveAs({ filePath, content });
+    if (!window.api || !activeTab) return null;
+    const savedPath = await window.api.file.saveAs({ filePath: activeTab.filePath, content: activeTab.content });
     if (savedPath) {
-      setFilePath(savedPath);
-      setIsDirty(false);
+      setTabs(prev => prev.map(t =>
+        t.id === activeTabId ? { ...t, filePath: savedPath, fileName: savedPath.split('/').pop(), isDirty: false } : t
+      ));
     }
     return savedPath;
-  }, [filePath, content]);
-
-  const handleNew = useCallback(async () => {
-    if (!(await confirmDiscard())) return;
-    setContent('');
-    setFilePath(null);
-    setFolderPath(null);
-    setFolderFiles([]);
-    setIsDirty(false);
-  }, [confirmDiscard]);
+  }, [activeTab, activeTabId]);
 
   const handleCompile = useCallback(async () => {
-    if (!window.api) return;
-    const result = await window.api.tex.compile({ filePath, content });
-    // Store synctex info for forward/inverse search
+    if (!window.api || !activeTab) return;
+    const result = await window.api.tex.compile({ filePath: activeTab.filePath, content: activeTab.content });
     if (result?.synctexPath) {
       synctexRef.current = { synctexPath: result.synctexPath, texPath: result.texPath };
     }
     return result;
-  }, [filePath, content]);
+  }, [activeTab]);
 
-  // ─── SyncTeX: inverse search (PDF click → editor) ───
+  // ─── SyncTeX: inverse search (PDF click → editor) ───────────────────────
   const handleInverseSearch = useCallback(({ line, column }) => {
     if (editorRef.current && line) {
       editorRef.current.revealLineInCenter(line);
@@ -396,7 +487,7 @@ export default function App() {
     }
   }, []);
 
-  // ─── SyncTeX: forward search (editor → PDF) ───
+  // ─── SyncTeX: forward search (editor → PDF) ─────────────────────────────
   const handleForwardSearch = useCallback(async () => {
     if (!window.api?.synctex || !synctexRef.current || !editorRef.current) return;
 
@@ -411,7 +502,6 @@ export default function App() {
       });
 
       if (result) {
-        // Trigger a new highlight object (new reference forces useEffect)
         setForwardHighlight({ ...result, _ts: Date.now() });
       }
     } catch (err) {
@@ -429,9 +519,6 @@ export default function App() {
 
   const handleSubmitAllMarkers = useCallback(() => {
     if (!outline?.nodes) return;
-    // U-09: skip markers that already have a task running/queued so
-    // double-clicking "Prove All" doesn't enqueue duplicate proofs for the
-    // same marker (which would both try to insert at the same location).
     const busyStatuses = new Set(['running', 'sketching', 'proving', 'verifying', 'queued']);
     const busyMarkerIds = new Set();
     for (const [, task] of proofTasks) {
@@ -443,38 +530,32 @@ export default function App() {
     let submitted = 0, skipped = 0;
     for (const node of outline.nodes) {
       if (!node.proveItMarker || node.hasProof) continue;
-      if (busyMarkerIds.has(node.id)) {
-        skipped++;
-        continue;
-      }
+      if (busyMarkerIds.has(node.id)) { skipped++; continue; }
       submitMarker({
         id: node.id,
         difficulty: node.proveItMarker.difficulty,
         label: `${node.type}: ${node.name}`,
         lineNumber: node.lineNumber,
         preferredModel: node.proveItMarker.preferredModel,
-        fullContent: content,  // pass full doc — backend assembles context
+        fullContent: activeTab?.content || '',
       });
       submitted++;
     }
     if (skipped > 0) {
       console.log(`[Prove All] submitted ${submitted}, skipped ${skipped} already in progress`);
     }
-  }, [outline, content, submitMarker, proofTasks]);
+  }, [outline, activeTab?.content, submitMarker, proofTasks]);
 
   // Replace the `% [PROVE IT: ...]` line for a marker with an actual proof.
-  // Also strips any subsequent `% SKETCH:` continuation lines so the user's
-  // hint comments don't linger below the inserted proof. Uses functional
-  // setContent so it works correctly from IPC callbacks (no stale closure).
-  //
-  // U-05: search outward from the stored lineNumber in both directions
-  // (±200 lines, then full-scan fallback) so proofs still land correctly
-  // when the user has edited the document between submit and completion.
+  // Also strips any subsequent `% SKETCH:` continuation lines.
+  // Uses the active tab's content via setTabs functional update.
   const insertProofAtMarker = useCallback((marker, proof) => {
     if (!marker || !proof) return;
     const lineNum = marker.lineNumber;
-    setContent(prev => {
-      const lines = prev.split('\n');
+    setTabs(prev => prev.map(tab => {
+      if (tab.id !== activeTabId) return tab;
+      const lines = tab.content.split('\n');
+
       const tryReplaceAt = (i) => {
         if (i < 0 || i >= lines.length) return false;
         if (!lines[i]?.includes('[PROVE IT:')) return false;
@@ -487,12 +568,11 @@ export default function App() {
 
       // Pass 1: expanding search centred on the stored line (±200)
       for (let d = 0; d <= 200; d++) {
-        if (tryReplaceAt((lineNum - 1) + d)) return lines.join('\n');
-        if (d > 0 && tryReplaceAt((lineNum - 1) - d)) return lines.join('\n');
+        if (tryReplaceAt((lineNum - 1) + d)) return { ...tab, content: lines.join('\n'), isDirty: true };
+        if (d > 0 && tryReplaceAt((lineNum - 1) - d)) return { ...tab, content: lines.join('\n'), isDirty: true };
       }
 
-      // Pass 2: full-document scan as a last resort — prefer the marker that
-      // matches the stored difficulty label if we have one.
+      // Pass 2: full-document scan
       const wantedDiff = marker.difficulty;
       let fallbackIdx = -1;
       for (let i = 0; i < lines.length; i++) {
@@ -500,19 +580,17 @@ export default function App() {
         if (wantedDiff && lines[i].includes(wantedDiff)) { fallbackIdx = i; break; }
         if (fallbackIdx < 0) fallbackIdx = i;
       }
-      if (fallbackIdx >= 0 && tryReplaceAt(fallbackIdx)) return lines.join('\n');
+      if (fallbackIdx >= 0 && tryReplaceAt(fallbackIdx)) return { ...tab, content: lines.join('\n'), isDirty: true };
 
       console.warn(`[insertProofAtMarker] No [PROVE IT:] marker found for "${marker.label}" (stored line ${lineNum})`);
-      return prev;
-    });
-  }, []);
+      return tab;
+    }));
+  }, [activeTabId]);
 
-  // Auto-inline handler for Easy proofs: insert into editor the moment the
-  // task completes, without going through the review queue.
+  // Auto-inline handler for Easy proofs
   const handleAutoInline = useCallback((data) => {
     console.log('[Fermat] Auto-inlining proof for', data.marker?.label || data.marker?.id);
     insertProofAtMarker(data.marker, data.proof);
-    // Also record in proof memory
     const node = outline?.nodes?.find(n => n.id === data.marker?.id);
     if (node && window.api?.copilot) {
       window.api.copilot.acceptProof({
@@ -523,35 +601,36 @@ export default function App() {
     }
   }, [insertProofAtMarker, outline]);
 
-  // Keep the ref in sync so useCopilot's IPC listener always sees latest.
   useEffect(() => { handleAutoInlineRef.current = handleAutoInline; }, [handleAutoInline]);
 
-  // ─── Window title: "filename — Fermat" with "•" prefix when dirty ───
+  // ─── Window title: active tab name + dirty indicator ────────────────────
   useEffect(() => {
-    const name = filePath ? filePath.split('/').pop() : 'Untitled';
-    document.title = isDirty ? `• ${name} — Fermat` : `${name} — Fermat`;
-  }, [filePath, isDirty]);
+    if (!activeTab) return;
+    const name = activeTab.filePath ? activeTab.filePath.split('/').pop() : activeTab.fileName;
+    document.title = activeTab.isDirty ? `• ${name} — Fermat` : `${name} — Fermat`;
+  }, [activeTab]);
 
-  // ─── Keep main process informed of dirty state ───────────────────────
-  // Main's close handler reads this to decide whether to prompt for save.
+  // ─── Keep main process informed of dirty state (any tab) ────────────────
   useEffect(() => {
-    window.api?.window?.setDirty(isDirty);
-  }, [isDirty]);
+    const anyDirty = tabs.some(t => t.isDirty);
+    window.api?.window?.setDirty(anyDirty);
+  }, [tabs]);
 
-  // ─── Refs for menu-event handlers (avoids stale closures in one-time listener setup) ───
-  const handleNewRef = useRef(null);
-  const handleOpenRef = useRef(null);
+  // ─── Stable refs for menu-event handlers ────────────────────────────────
+  const handleNewRef        = useRef(null);
+  const handleOpenRef       = useRef(null);
   const handleOpenFolderRef = useRef(null);
-  const handleSaveRef = useRef(null);
-  const handleSaveAsRef = useRef(null);
-  useEffect(() => { handleNewRef.current = handleNew; }, [handleNew]);
-  useEffect(() => { handleOpenRef.current = handleOpen; }, [handleOpen]);
+  const handleSaveRef       = useRef(null);
+  const handleSaveAsRef     = useRef(null);
+  const handleCloseTabRef   = useRef(null);
+  useEffect(() => { handleNewRef.current        = handleNew;      }, [handleNew]);
+  useEffect(() => { handleOpenRef.current       = handleOpen;     }, [handleOpen]);
   useEffect(() => { handleOpenFolderRef.current = handleOpenFolder; }, [handleOpenFolder]);
-  useEffect(() => { handleSaveRef.current = handleSave; }, [handleSave]);
-  useEffect(() => { handleSaveAsRef.current = handleSaveAs; }, [handleSaveAs]);
+  useEffect(() => { handleSaveRef.current       = handleSave;     }, [handleSave]);
+  useEffect(() => { handleSaveAsRef.current     = handleSaveAs;   }, [handleSaveAs]);
+  useEffect(() => { handleCloseTabRef.current   = () => handleCloseTab(activeTabId); }, [handleCloseTab, activeTabId]);
 
-  // ─── Subscribe to Electron menu commands (registered once on mount) ──
-  // Allows Cmd+N/O/S/Shift+S to work regardless of where keyboard focus is.
+  // ─── Subscribe to Electron menu commands ────────────────────────────────
   useEffect(() => {
     if (!window.api?.window) return;
     const offs = [
@@ -560,28 +639,24 @@ export default function App() {
       window.api.window.onMenuOpenFolder(() => handleOpenFolderRef.current?.()),
       window.api.window.onMenuSave(() => handleSaveRef.current?.()),
       window.api.window.onMenuSaveAs(() => handleSaveAsRef.current?.()),
+      window.api.window.onMenuCloseTab(() => handleCloseTabRef.current?.()),
       window.api.window.onMenuSaveAndClose(async () => {
         const saved = await handleSaveRef.current?.();
-        // If save succeeded (or was dismissed), force-close the window.
-        // If the user cancelled the save dialog, leave the window open.
         if (saved) window.api.window.forceClose();
       }),
     ];
     return () => offs.forEach(off => off?.());
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Lean verification event wiring ────────────────────────────────────────
-  // Listen to per-line output from lean and to proof:status phase changes.
+  // ─── Lean verification event wiring ─────────────────────────────────────
   useEffect(() => {
     if (!window.api) return;
 
-    // Live lean output lines
     const offOutput = window.api.lean?.onOutput?.((data) => {
       leanOutputLinesRef.current = [...leanOutputLinesRef.current, data.line];
       setLeanState(prev => prev ? { ...prev, outputLines: leanOutputLinesRef.current } : prev);
     });
 
-    // proof:status carries Lean phase transitions
     const offStatus = window.api.copilot.onProofStatus?.((data) => {
       const leanPhases = [
         'lean-unavailable',
@@ -592,11 +667,7 @@ export default function App() {
       ];
       if (!leanPhases.includes(data.phase)) return;
 
-      // QA P1-03: surface "lean was requested but binary is missing" as a
-      // distinct state. Switch to the Lean tab so the warning banner is
-      // actually visible.
       if (data.phase === 'lean-unavailable' || (data.phase === 'lean-sketching' && data.attempt === 1)) {
-        // New lean pass (or unavailable warning) — reset output buffer and switch tab
         leanOutputLinesRef.current = [];
         setRightTab('lean');
       }
@@ -607,17 +678,13 @@ export default function App() {
         attempt: data.attempt,
         maxAttempts: data.maxAttempts,
         outputLines: leanOutputLinesRef.current,
-        // Statement review fields (only present on lean-statement-review event)
         ...(data.statement !== undefined ? { statement: data.statement } : {}),
         ...(data.sketch    !== undefined ? { sketch:    data.sketch    } : {}),
-        // Preserve sorries if provided
         ...(data.sorries   !== undefined ? { sorries:   data.sorries   } : {}),
-        // Human-readable message for lean-unavailable banner
         ...(data.message   !== undefined ? { message:   data.message   } : {}),
       }));
     });
 
-    // proof:completed carries final lean results
     const offCompleted = window.api.copilot.onProofCompleted?.((data) => {
       if (data.leanCode !== undefined) {
         setLeanState(prev => ({
@@ -645,7 +712,7 @@ export default function App() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Lean statement review controls ────────────────────────────────────────
+  // ─── Lean statement review controls ─────────────────────────────────────
   const handleConfirmStatement = useCallback((taskId) => {
     window.api?.lean?.confirmStatement?.(taskId);
   }, []);
@@ -664,7 +731,6 @@ export default function App() {
     if (!task) return;
     insertProofAtMarker(task.marker, proof);
 
-    // Record accepted proof in memory so future proofs can reference it
     const node = outline?.nodes?.find(n => n.id === task.marker?.id);
     if (node && window.api?.copilot) {
       window.api.copilot.acceptProof({
@@ -678,8 +744,8 @@ export default function App() {
   return (
     <div className="app-container">
       <Toolbar
-        filePath={filePath}
-        isDirty={isDirty}
+        filePath={activeTab?.filePath || null}
+        isDirty={activeTab?.isDirty || false}
         folderPath={folderPath}
         folderFiles={folderFiles}
         onNew={handleNew}
@@ -712,16 +778,27 @@ export default function App() {
         )}
 
         <div className="editor-area" ref={editorAreaRef}>
-          <div className="editor-panel" style={{ flex: showPdf ? `0 0 ${editorFlex}%` : '1 1 auto' }}>
-            <TexEditor
-              content={content}
-              onChange={handleContentChange}
-              editorRef={editorRef}
-              proofTasks={proofTasks}
-              onForwardSearch={handleForwardSearch}
-              onSave={handleSave}
-              onCompile={handleCompile}
+          <div className="editor-panel" style={{ flex: showPdf ? `0 0 ${editorFlex}%` : '1 1 auto', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            {/* ── Tab bar ──────────────────────────────────────── */}
+            <TabBar
+              tabs={tabs}
+              activeTabId={activeTabId}
+              onSelect={handleSelectTab}
+              onClose={handleCloseTab}
             />
+            {/* ── Monaco editor ────────────────────────────────── */}
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <TexEditor
+                content={activeTab?.content || ''}
+                onChange={handleContentChange}
+                editorRef={editorRef}
+                activeTabId={activeTabId}
+                proofTasks={proofTasks}
+                onForwardSearch={handleForwardSearch}
+                onSave={handleSave}
+                onCompile={handleCompile}
+              />
+            </div>
           </div>
 
           {showPdf && (
@@ -793,7 +870,7 @@ export default function App() {
         <SettingsModal onClose={() => setShowSettings(false)} />
       )}
 
-      {/* ── File loading overlay (U-02) ───────────────────────────────── */}
+      {/* ── File loading overlay ────────────────────────────────────── */}
       {fileLoading && (
         <div style={{
           position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.35)',
@@ -858,7 +935,7 @@ export default function App() {
         </div>
       )}
 
-      {/* ── Proof-error toasts ─────────────────────────────────────── */}
+      {/* ── Proof-error toasts ──────────────────────────────────────── */}
       {proofErrors.length > 0 && (
         <div style={{
           position: 'fixed',

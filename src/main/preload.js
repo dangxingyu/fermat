@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('api', {
     onMenuSave:        (cb) => { const h = () => cb(); ipcRenderer.on('menu:save',          h); return () => ipcRenderer.removeListener('menu:save',          h); },
     onMenuSaveAs:      (cb) => { const h = () => cb(); ipcRenderer.on('menu:save-as',       h); return () => ipcRenderer.removeListener('menu:save-as',       h); },
     onMenuSaveAndClose:(cb) => { const h = () => cb(); ipcRenderer.on('menu:save-and-close',h); return () => ipcRenderer.removeListener('menu:save-and-close',h); },
+    onMenuCloseTab:   (cb) => { const h = () => cb(); ipcRenderer.on('menu:close-tab',      h); return () => ipcRenderer.removeListener('menu:close-tab',      h); },
+    // 3-button dialog: 'save' | 'discard' | 'cancel'
+    confirmCloseTab: (fileName) => ipcRenderer.invoke('window:confirm-close-tab', fileName),
   },
 
   // TeX compilation
