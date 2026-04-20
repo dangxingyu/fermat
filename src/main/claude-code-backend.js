@@ -4,13 +4,11 @@ const fs = require('fs');
 const os = require('os');
 const { ContextAssembler } = require('./context-assembler');
 const { parseTheoryOutline } = require('./outline-parser');
+const { ClaudeProvider, resolveModelId } = require('./llm-provider');
 
 /**
  * Classify an API/network error into a structured { code, userMessage } pair
  * so the renderer can show a helpful, actionable toast instead of a raw stack.
- *
- * Attaches `.fermatCode` and `.fermatUserMessage` to the error in place so
- * copilot-engine.js can forward them without knowing about API internals.
  */
 function classifyAndAnnotateError(err) {
   const status = err.status || err.statusCode;
@@ -50,29 +48,12 @@ function classifyAndAnnotateError(err) {
  * ClaudeCodeBackend
  *
  * Uses Claude Code (the CLI agent) as the proving backend for Fermat.
- *
- * Instead of calling the Anthropic/Google API directly, we:
- *   1. Parse the document into structured context
- *   2. Write a task file with the context + skill reference
- *   3. Invoke `claude` CLI in non-interactive mode
- *   4. Parse the output to extract the proof
- *
- * This gives us:
- *   - Skills system for different proof strategies
- *   - Agent-level reasoning (the model can read files, think step by step)
- *   - Tool use (model can invoke Lean/Coq checkers if available)
- *   - Natural extension to multi-step proving workflows
- *
- * Falls back to direct API calls if Claude Code CLI is not available.
+ * Falls back to direct API via ClaudeProvider when the CLI is not available.
  */
 class ClaudeCodeBackend {
   constructor() {
     this.contextAssembler = new ContextAssembler();
-    // Project root — where .claude/skills/ lives.
-    // In packaged builds, electron-builder copies .claude/skills into
-    // Contents/Resources/.claude/skills via the build.extraResources config,
-    // and __dirname points inside app.asar (read-only, wrong place to cd into).
-    // In dev we use the repo root so claude CLI auto-discovers the real skills.
+
     const { app } = require('electron');
     if (app && app.isPackaged) {
       this.projectRoot = process.resourcesPath;
@@ -84,11 +65,16 @@ class ClaudeCodeBackend {
     this._hasClaudeCli = false;
     this._detectCli();
 
-    // Working directory for task files (temp prompts etc.)
     this.workDir = path.join(os.tmpdir(), 'fermat-proving');
     if (!fs.existsSync(this.workDir)) {
       fs.mkdirSync(this.workDir, { recursive: true });
     }
+
+    // Provider abstraction for direct API calls (CLI path bypasses this)
+    this._provider = null;
+
+    // Session-scoped verify cache: source-hash → LeanRunner.verify() result
+    this._verifyCache = new Map();
   }
 
   _detectCli() {
@@ -116,54 +102,55 @@ class ClaudeCodeBackend {
   }
 
   /**
+   * Get or (re)create the ClaudeProvider for a given apiKey + model pair.
+   * Called on every direct-API _callLlm invocation; cheap if nothing changed.
+   */
+  _getOrUpdateProvider(apiKey, model) {
+    const modelId = resolveModelId(model);
+    if (!this._provider || this._provider.apiKey !== apiKey || this._provider.model !== modelId) {
+      this._provider = new ClaudeProvider({ apiKey, model: modelId });
+    }
+    return this._provider;
+  }
+
+  /**
    * Execute a proving workflow for a given marker.
    *
    * @param {string} texContent  — full document content
    * @param {object} marker      — { id, difficulty, label, lineNumber, ... }
    * @param {object} options     — { apiKey, model, skipVerify, onStream, onStatus,
    *                                  verificationMode, leanRunner, maxLeanRetries,
-   *                                  onStatementReview, taskId }
+   *                                  onStatementReview, taskId, signal }
    * @returns {object} { proof, verdict?, sketch?, leanCode?, leanVerified?, leanLog?,
    *                     sorries?, leanStatement? }
    */
   async prove(texContent, marker, options = {}) {
     console.log(`[Prove] Starting proof for marker "${marker.label || marker.id}" (line ${marker.lineNumber || '?'})`);
-    // B-03: bail early if the caller has already aborted
     if (options.signal?.aborted) {
       const err = new Error('Cancelled before start');
       err.code = 'FERMAT_CANCELLED';
       throw err;
     }
 
-    // 1. Parse the document
     const outline = parseTheoryOutline(texContent);
-
-    // 2. Find the target node
     const targetNode = this._findTargetNode(outline, marker);
     if (!targetNode) {
       throw new Error(`Could not find theorem/lemma for marker: ${marker.label}`);
     }
 
-    // 3. Assemble context
     const ctx = this.contextAssembler.assembleForProof(outline, targetNode);
     const contextPrompt = this.contextAssembler.formatAsPrompt(ctx);
 
-    // 4. Choose workflow based on difficulty
     const difficulty = targetNode.proveItMarker?.difficulty || 'Medium';
     const whichPath = this._hasClaudeCli ? 'Claude CLI' : 'direct API';
     console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${whichPath} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length}`);
 
-    // Q-01: single three-phase pipeline for both CLI and direct-API paths.
-    // _callLlm handles the CLI-vs-API divergence internally (system prompt
-    // concatenation vs native system message).
-    let results;
     if (!this._hasClaudeCli && !options.apiKey) {
       const err = new Error('No API key configured and Claude Code CLI not available.');
       throw classifyAndAnnotateError(err);
     }
-    results = await this._proveThreePhase(contextPrompt, difficulty, targetNode, options);
+    let results = await this._proveThreePhase(contextPrompt, difficulty, targetNode, options);
 
-    // ── Optional Lean verification pass ──────────────────────────────────────
     if (options.verificationMode === 'lean' && options.leanRunner?.isAvailable) {
       results = await this._leanSketchFillVerify(results, contextPrompt, targetNode, options);
     }
@@ -172,32 +159,21 @@ class ClaudeCodeBackend {
   }
 
   /**
-   * Unified three-phase prove pipeline (Q-01).
-   *
-   * Replaces the previous _proveWithClaudeCode / _proveWithDirectApi split —
-   * both paths now flow through _callLlm, which internally dispatches to
-   * `claude --print` (CLI) or the Anthropic SDK's streaming API.
-   *
-   * Phases:
-   *   1. Sketch (Medium/Hard only) — fermat-sketch skill elaborates user hints
-   *   2. Prove — fermat-prove skill writes the proof
-   *   3. Verify (unless skipVerify) — fermat-verify skill judges the proof,
-   *      with one self-correction retry on FAIL / NEEDS_REVISION
+   * Unified three-phase LaTeX prove pipeline (Q-01).
+   * Phases: Sketch (Medium/Hard) → Prove → Verify + 1 self-correction.
    */
   async _proveThreePhase(contextPrompt, difficulty, targetNode, options) {
     const { onStream, apiKey, model, signal } = options;
     const results = {};
 
-    // Phase 1: Sketch (Medium / Hard)
     if (difficulty !== 'Easy') {
-      console.log(`[Prove] Phase 1/3: sketch (fermat-sketch skill)`);
+      console.log('[Prove] Phase 1/3: sketch (fermat-sketch skill)');
       const sketchSkill = this._loadSkill('fermat-sketch');
       const t0 = Date.now();
       results.sketch = await this._callLlm(contextPrompt, onStream, apiKey, model, sketchSkill, signal);
       console.log(`[Prove] Sketch done (${Date.now() - t0}ms, ${results.sketch.length}ch)`);
     }
 
-    // Phase 2: Prove
     console.log(`[Prove] Phase ${difficulty === 'Easy' ? '1/1' : '2/3'}: prove (fermat-prove skill)`);
     const proveSkill = this._loadSkill('fermat-prove');
     let proveInput = contextPrompt;
@@ -208,9 +184,8 @@ class ClaudeCodeBackend {
     let proofOutput = await this._callLlm(proveInput, onStream, apiKey, model, proveSkill, signal);
     console.log(`[Prove] Proof draft done (${Date.now() - tp0}ms, ${proofOutput.length}ch)`);
 
-    // Phase 3: Verify (+ single self-correction on failure)
     if (!options.skipVerify) {
-      console.log(`[Prove] Phase 3/3: verify (fermat-verify skill)`);
+      console.log('[Prove] Phase 3/3: verify (fermat-verify skill)');
       const verifySkill = this._loadSkill('fermat-verify');
       const verifyInput = `${contextPrompt}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
       const tv0 = Date.now();
@@ -221,7 +196,7 @@ class ClaudeCodeBackend {
       const needsRetry = results.verdict &&
         (results.verdict.includes('<verdict>FAIL') || results.verdict.includes('<verdict>NEEDS_REVISION'));
       if (needsRetry) {
-        console.log(`[Prove] Verification failed — retrying with feedback`);
+        console.log('[Prove] Verification failed — retrying with feedback');
         const retryInput =
           `${contextPrompt}\n\n<previous_attempt>\n${proofOutput}\n</previous_attempt>\n\n` +
           `<verification_feedback>\n${results.verdict}\n</verification_feedback>\n\n` +
@@ -233,7 +208,7 @@ class ClaudeCodeBackend {
         console.log(`[Prove] Re-verify verdict: ${results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown'}`);
       }
     } else {
-      console.log(`[Prove] Verification skipped`);
+      console.log('[Prove] Verification skipped');
     }
 
     results.proof = this._extractProof(proofOutput);
@@ -245,29 +220,27 @@ class ClaudeCodeBackend {
   /**
    * Three-phase Lean 4 verification pipeline.
    *
-   * Phase 1 – Sketch:
-   *   Claude generates a proof skeleton with `sorry` for non-trivial steps.
-   *   lean type-checks the skeleton; retries up to 2× on structural errors.
-   *   ⏸ Statement Review: pauses and waits for user to confirm the theorem statement.
+   * Phase 1 – Sketch:  Claude generates a sorry-skeleton; lean type-checks it.
+   * ⏸ Statement Review: user confirms the theorem statement.
+   * Phase 2 – Fill: for each sorry, Claude fills in the proof; lean verifies.
+   * Phase 3 – Final verdict.
    *
-   * Phase 2 – Fill:
-   *   For each sorry, Claude fills in the proof; lean verifies each fill.
-   *
-   * Phase 3 – Sorrify on failure:
-   *   Failed fills are retried with error context. If still failing after
-   *   maxLeanRetries attempts the sorry is kept (lean-partial result).
-   *
-   * Status events emitted via options.onStatus:
-   *   lean-sketching | lean-sketch-retry | lean-sketch-checking | lean-sketch-ok
-   *   lean-statement-review  ← ⏸ waits for options.onStatementReview resolution
-   *   lean-filling (sorryIndex/total) | lean-fill-ok | lean-fill-retry | lean-fill-failed
-   *   lean-verified | lean-partial | lean-failed
+   * Optimisations vs. original:
+   *   - Rich Lean 4 system prompt (tactic guidance, Lean 3 pitfall guards)
+   *   - Few-shot examples in sketch / fill / diagnose prompts
+   *   - trace_state goal-state probe after sketch verifies
+   *   - Context-region-aware sorry parser with enclosing-declaration context
+   *   - Lean verify result cache (avoids re-running lean on identical source)
+   *   - Full contextPrompt in fill/diagnose (not truncated to 800/600 chars)
    */
   async _leanSketchFillVerify(results, contextPrompt, targetNode, options) {
     const { onStream, onStatus, leanRunner, apiKey, model } = options;
     const maxSketchRetries = 2;
     const maxFillRetries = options.maxLeanRetries ?? 3;
-    const LEAN_SYS = 'You are a Lean 4 proof assistant. Output only valid Lean 4 code in a ```lean4 block.';
+
+    // Build rich Lean 4 system prompt (aware of mathlib availability)
+    const usesMathlib = leanRunner.mathlibReady;
+    const LEAN_SYS = this._buildLeanSys(usesMathlib);
 
     const emitStatus = (phase, extra = {}) => {
       if (onStatus) onStatus({ phase, ...extra });
@@ -297,7 +270,7 @@ class ClaudeCodeBackend {
 
       emitStatus('lean-sketch-checking', { attempt });
       sketchLog = '';
-      const sketchResult = await leanRunner.verify(sketch, (line) => {
+      const sketchResult = await this._cachedVerify(leanRunner, sketch, (line) => {
         sketchLog += line + '\n';
         if (onStream) onStream(`[lean] ${line}`);
       }, options.signal);
@@ -305,7 +278,6 @@ class ClaudeCodeBackend {
 
       if (sketchErrors.length === 0) {
         emitStatus('lean-sketch-ok', { attempt });
-        // If no sorries at all, the sketch IS the complete proof
         if (!sketch.match(/\bsorry\b/)) {
           emitStatus('lean-verified', {});
           return {
@@ -318,7 +290,7 @@ class ClaudeCodeBackend {
             leanStatement: this._parseTheoremStatement(sketch),
           };
         }
-        break; // proceed to statement review
+        break;
       }
 
       if (attempt > maxSketchRetries) {
@@ -334,8 +306,14 @@ class ClaudeCodeBackend {
       }
     }
 
+    // ── Goal-state probe ────────────────────────────────────────────────────
+    // After the sketch type-checks, run a trace_state probe to extract
+    // Lean-elaborated goal states for bare (unannotated) sorries. This
+    // enriches sorry.expectedType and sorry.hypotheses before the fill phase.
+    const sorries = await this._probeGoalStates(sketch, leanRunner, options.signal);
+    console.log(`[LeanSFV] Parsed ${sorries.length} sorries from sketch`);
+
     // ── ⏸ Statement Review ────────────────────────────────────────────────
-    // Pause pipeline and let the user confirm (or edit/cancel) the theorem statement.
     const statement = this._parseTheoremStatement(sketch);
     emitStatus('lean-statement-review', { statement, sketch });
 
@@ -350,10 +328,9 @@ class ClaudeCodeBackend {
       }
 
       if (reviewResult.action === 'edit' && reviewResult.newCode) {
-        // Re-verify the user-edited sketch before proceeding
         sketch = reviewResult.newCode;
         sketchLog = '';
-        const recheck = await leanRunner.verify(sketch, (line) => {
+        const recheck = await this._cachedVerify(leanRunner, sketch, (line) => {
           sketchLog += line + '\n';
           if (onStream) onStream(`[lean] ${line}`);
         }, options.signal);
@@ -362,12 +339,8 @@ class ClaudeCodeBackend {
           console.warn('[LeanSFV] User-edited sketch has errors; proceeding anyway per user choice');
         }
       }
-      // action === 'confirm': fall through
     }
 
-    // ── Parse sorries ──────────────────────────────────────────────────────
-    const sorries = this._parseSorries(sketch);
-    console.log(`[LeanSFV] Parsed ${sorries.length} sorries from sketch`);
     const sorryStatuses = sorries.map((s, i) => ({
       ...s, index: i, status: 'pending', fillCode: null, errors: null,
     }));
@@ -377,8 +350,8 @@ class ClaudeCodeBackend {
 
     // ── Phase 2 & 3: Fill each sorry ──────────────────────────────────────
     for (let i = 0; i < sorries.length; i++) {
-      // Early exit if all remaining sorries already gone (earlier fill was generous)
-      if (!(currentCode.match(/\bsorry\b/g) || []).length) {
+      // Count sorries only in code regions (P-7: ignore comments)
+      if (!this._countCodeSorries(currentCode)) {
         sorryStatuses.slice(i).forEach(s => { s.status = 'filled'; s.fillCode = currentCode; });
         break;
       }
@@ -390,7 +363,7 @@ class ClaudeCodeBackend {
         filled: sorryStatuses.filter(s => s.status === 'filled').length,
       });
 
-      const prevSorryCount = (currentCode.match(/\bsorry\b/g) || []).length;
+      const prevSorryCount = this._countCodeSorries(currentCode);
       let fillErrors = [];
       let lastCandidate = currentCode;
 
@@ -401,7 +374,7 @@ class ClaudeCodeBackend {
 
         const prompt = attempt === 1
           ? this._buildFillPrompt(currentCode, sorry, i, sorries.length, results.proof, contextPrompt)
-          : this._buildDiagnosePrompt(lastCandidate, sorry, fillErrors, contextPrompt);
+          : this._buildDiagnosePrompt(lastCandidate, sorry, fillErrors, contextPrompt, attempt);
 
         let rawFill;
         try {
@@ -415,14 +388,14 @@ class ClaudeCodeBackend {
         lastCandidate = candidate;
 
         let lineOut = '';
-        const fillResult = await leanRunner.verify(candidate, (line) => {
+        const fillResult = await this._cachedVerify(leanRunner, candidate, (line) => {
           lineOut += line + '\n';
           if (onStream) onStream(`[lean] ${line}`);
         }, options.signal);
         leanLog = lineOut;
         fillErrors = fillResult.errors.filter(e => e.severity === 'error');
 
-        const newSorryCount = (candidate.match(/\bsorry\b/g) || []).length;
+        const newSorryCount = this._countCodeSorries(candidate);
         const madeProgress = newSorryCount < prevSorryCount;
 
         if (fillErrors.length === 0 && madeProgress) {
@@ -434,7 +407,6 @@ class ClaudeCodeBackend {
         }
 
         if (!madeProgress) {
-          // Claude didn't remove the sorry — synthesise an error to trigger retry
           fillErrors = [
             ...fillErrors,
             { severity: 'error', line: 0, col: 0, message: 'Sorry was not filled — no progress made' },
@@ -450,12 +422,11 @@ class ClaudeCodeBackend {
     }
 
     // ── Final verdict ──────────────────────────────────────────────────────
-    const allFilled  = sorryStatuses.every(s => s.status === 'filled');
-    const anyFilled  = sorryStatuses.some(s => s.status === 'filled');
-    const remainingSorries = (currentCode.match(/\bsorry\b/g) || []).length;
+    const anyFilled        = sorryStatuses.some(s => s.status === 'filled');
+    const remainingSorries = this._countCodeSorries(currentCode);
 
     let finalLog = '';
-    const finalResult = await leanRunner.verify(currentCode, (line) => { finalLog += line + '\n'; }, options.signal);
+    const finalResult = await this._cachedVerify(leanRunner, currentCode, (line) => { finalLog += line + '\n'; }, options.signal);
     const finalErrors = finalResult.errors.filter(e => e.severity === 'error');
     const leanVerified = finalErrors.length === 0 && remainingSorries === 0;
 
@@ -474,68 +445,72 @@ class ClaudeCodeBackend {
     };
   }
 
+  // ── System prompt ─────────────────────────────────────────────────────────
+
   /**
-   * Unified LLM call — uses Claude CLI when available, direct API otherwise.
-   * @param {string} [systemPrompt] — system instructions (prepended for CLI, separate param for API)
-   * @param {AbortSignal} [signal]  — forward cancel to the CLI spawn or SDK stream (B-03)
+   * Build the rich Lean 4 system prompt used for all sketch/fill/diagnose calls.
+   * Includes tactic hierarchy, Lean 3 pitfall guards, and sorry annotation rules.
    */
-  async _callLlm(prompt, onStream, apiKey, model, systemPrompt = '', signal = undefined) {
-    if (signal?.aborted) {
-      const err = new Error('Cancelled before LLM call');
-      err.code = 'FERMAT_CANCELLED';
-      throw err;
-    }
-    if (this._hasClaudeCli) {
-      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
-      return this._runClaude(fullPrompt, onStream, signal, model);
-    }
-    const Anthropic = require('@anthropic-ai/sdk');
-    const client = new Anthropic({ apiKey });
-    const modelId = model || 'claude-sonnet-4-6';
-    let text = '';
-    const msgParams = {
-      model: modelId,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: prompt }],
-    };
-    if (systemPrompt) msgParams.system = systemPrompt;
-    // Anthropic SDK accepts an AbortSignal as the second arg's `signal` option.
-    const stream = await client.messages.stream(msgParams, signal ? { signal } : undefined);
-    try {
-      for await (const ev of stream) {
-        if (signal?.aborted) {
-          try { stream.controller?.abort?.(); } catch {}
-          const err = new Error('Cancelled mid-stream');
-          err.code = 'FERMAT_CANCELLED';
-          throw err;
-        }
-        if (ev.type === 'content_block_delta' && ev.delta?.text) {
-          text += ev.delta.text;
-          if (onStream) onStream(ev.delta.text);
-        }
-      }
-    } catch (err) {
-      if (signal?.aborted) {
-        const abortErr = new Error('Cancelled');
-        abortErr.code = 'FERMAT_CANCELLED';
-        throw abortErr;
-      }
-      throw err;
-    }
-    return text;
+  _buildLeanSys(usesMathlib = false) {
+    const importLine = usesMathlib ? 'import Mathlib' : 'import Std';
+    return `\
+You are a Lean 4 proof assistant integrated into the Fermat theorem-proving pipeline.
+
+IMPORTS: Every generated file must begin with \`${importLine}\`.
+
+LEAN 4 vs LEAN 3 — avoid these common Lean 3 regressions:
+- Use \`by\` for tactic blocks, NOT \`begin ... end\`
+- Module names are UpperCamelCase: \`Nat.Prime\` not \`nat.prime\`
+- \`And\` fields: \`h.left\` / \`h.right\`, not \`h.1\` / \`h.2\`
+- Tactic separators: newlines or \`<;>\`, NOT commas
+- \`ring\` not \`ring'\`; \`simp\` not \`simp_rw\` for simple rewrites
+- \`rcases h with ⟨a, b⟩\` / \`obtain ⟨a, b⟩ := h\` for destructuring
+- \`#check\` is a top-level command only — never use it inside a tactic block
+- Case labels: \`case zero =>\` / \`case succ n ih =>\`, not comma-separated
+
+TACTIC PRIORITY (try in order for each goal type):
+- Linear arithmetic (ℤ/ℕ equalities, inequalities): \`omega\` → \`linarith\` → \`norm_num\`
+- Ring / field identities:                           \`ring\` → \`field_simp; ring\`
+- Decidable / small numerics:                        \`decide\` → \`norm_num\`
+- Propositional tautology:                           \`tauto\` → \`aesop\`
+- Existential with known witness:                    \`exact ⟨w, h⟩\` → \`refine ⟨?_, ?_⟩\`
+- Set/finset membership:                             \`simp [Finset.mem_insert]\` → \`decide\`
+- Structural induction:                              \`induction n with | zero => ... | succ n ih => ...\`
+- Case split on hypothesis:                          \`rcases h with h₁ | h₂\` → \`obtain ⟨a, ha⟩ := h\`
+
+SORRY ANNOTATION RULE: Every \`sorry\` in a skeleton MUST be annotated as
+\`show T; sorry\` where T is the Lean type of the subgoal at that point.
+If unsure of the exact type, write \`show ?_; sorry\` as a placeholder.
+This annotation is REQUIRED — bare \`sorry\` without \`show T;\` is not acceptable.
+
+Output ONLY a \`\`\`lean4 ... \`\`\` code block. No prose, no markdown outside the fence.`;
   }
+
+  // ── Prompt builders ───────────────────────────────────────────────────────
 
   /** Build the sketch-generation prompt (Phase 1). */
   _buildSketchPrompt(contextPrompt, naturalProof, prevSketch, prevErrors, attempt) {
     if (attempt === 1) {
-      return `You are generating a Lean 4 proof skeleton.
+      return `\
+Generate a Lean 4 proof skeleton with \`sorry\` placeholders.
 
 RULES:
-- Use \`sorry\` as a placeholder for non-trivial proof steps.
-- The output MUST type-check with \`sorry\` allowed (no structural or syntax errors).
-- Annotate each sorry's expected type with \`show T; sorry\` where possible.
-- Do NOT fill in real proofs for sorry placeholders — just build the skeleton.
-- Output ONLY a \`\`\`lean4 ... \`\`\` code block, nothing else.
+1. The skeleton MUST type-check with sorry allowed (no structural/syntax errors).
+2. EVERY sorry MUST be annotated: \`show T; sorry\` where T is the expected type.
+3. Do NOT fill in real proofs — only build the structure.
+4. Include \`import Mathlib\` (or appropriate imports) at the top.
+
+EXAMPLE — how to turn an informal proof into a skeleton:
+  Informal: "We induct on n. Base: 0 + 0 = 0 by rfl. Step: assume n + 0 = n, then
+             (n+1) + 0 = n + 1 follows because addition is defined recursively."
+  Skeleton:
+  \`\`\`lean4
+  import Mathlib
+  theorem add_zero (n : ℕ) : n + 0 = n := by
+    induction n with
+    | zero      => show 0 + 0 = 0; sorry
+    | succ n ih => show n.succ + 0 = n.succ; sorry
+  \`\`\`
 
 MATHEMATICAL CONTEXT:
 ${contextPrompt}
@@ -544,7 +519,8 @@ INFORMAL PROOF TO FORMALIZE:
 ${naturalProof}`;
     }
 
-    return `Your previous Lean 4 proof sketch had structural errors. Fix the STRUCTURE only.
+    return `\
+Your previous Lean 4 proof sketch had structural errors. Fix the STRUCTURE only.
 Keep all \`sorry\` placeholders as-is — do not fill them in.
 
 Previous sketch:
@@ -558,31 +534,40 @@ ${prevErrors.map(e => `  line ${e.line}: ${e.message}`).join('\n')}
 Output the corrected \`\`\`lean4 ... \`\`\` code block.`;
   }
 
-  /**
-   * Parse the positions and context of every `sorry` in the given Lean code.
-   * Returns [{ line, col, surroundingCode, expectedType }].
-   */
-  _parseSorries(code) {
-    const lines = code.split('\n');
-    const sorries = [];
-    for (let i = 0; i < lines.length; i++) {
-      if (!/\bsorry\b/.test(lines[i])) continue;
-      const col = lines[i].indexOf('sorry');
-      // Try to extract annotated expected type from `show T; sorry` or `(sorry : T)`
-      const showMatch  = lines[i].match(/\bshow\s+(.+?);\s*sorry\b/);
-      const annotMatch = lines[i].match(/\(\s*sorry\s*:\s*([^)]+)\)/);
-      const expectedType = (showMatch?.[1] || annotMatch?.[1] || '').trim() || null;
-      // ±5 lines context
-      const ctxLines = lines.slice(Math.max(0, i - 5), Math.min(lines.length, i + 3));
-      sorries.push({ line: i + 1, col, expectedType, surroundingCode: ctxLines.join('\n') });
-    }
-    return sorries;
-  }
-
   /** Build the fill prompt for sorry #sorryIndex (Phase 2). */
   _buildFillPrompt(currentCode, sorry, sorryIndex, total, naturalProof, contextPrompt) {
-    const typeHint = sorry.expectedType ? `\nExpected type: \`${sorry.expectedType}\`` : '';
-    return `Fill in exactly ONE \`sorry\` in the following Lean 4 proof sketch.
+    const typeHint = sorry.expectedType
+      ? `\nExpected type (from Lean elaboration): \`${sorry.expectedType}\``
+      : '';
+
+    const hypHint = sorry.hypotheses?.length
+      ? `\nLocal hypotheses at this point:\n${sorry.hypotheses.map(h => `  ${h}`).join('\n')}`
+      : '';
+
+    const declHint = sorry.enclosingDeclaration
+      ? `\nEnclosing declaration:\n\`\`\`lean4\n${sorry.enclosingDeclaration}\n\`\`\``
+      : '';
+
+    return `\
+Fill in exactly ONE \`sorry\` in the following Lean 4 proof sketch.
+
+EXAMPLE — filling a sorry:
+  Before (sorry #1 of 2):
+  \`\`\`lean4
+  theorem even_sq (n : ℕ) (h : 2 ∣ n) : 2 ∣ n ^ 2 := by
+    obtain ⟨k, hk⟩ := h
+    subst hk
+    show 2 ∣ (2 * k) ^ 2; sorry
+    show 2 ∣ k; sorry
+  \`\`\`
+  After (sorry #1 filled):
+  \`\`\`lean4
+  theorem even_sq (n : ℕ) (h : 2 ∣ n) : 2 ∣ n ^ 2 := by
+    obtain ⟨k, hk⟩ := h
+    subst hk
+    exact ⟨2 * k ^ 2, by ring⟩
+    show 2 ∣ k; sorry
+  \`\`\`
 
 SKETCH (filling sorry ${sorryIndex + 1} of ${total}):
 \`\`\`lean4
@@ -593,21 +578,60 @@ The sorry to fill is near line ${sorry.line}:
 \`\`\`
 ${sorry.surroundingCode}
 \`\`\`
-${typeHint}
+${typeHint}${hypHint}${declHint}
 
 INFORMAL PROOF CONTEXT:
 ${naturalProof}
 
-${contextPrompt.slice(0, 800)}
+MATHEMATICAL CONTEXT:
+${contextPrompt}
 
 OUTPUT: The complete Lean 4 code with sorry #${sorryIndex + 1} replaced by a working proof.
 Keep all OTHER \`sorry\` placeholders unchanged.
 Output ONLY a \`\`\`lean4 ... \`\`\` code block.`;
   }
 
-  /** Build the diagnose/retry prompt for a failed fill (Phase 3). */
-  _buildDiagnosePrompt(code, sorry, errors, contextPrompt) {
-    return `The following Lean 4 proof attempt failed. Fix the errors.
+  /**
+   * Build the diagnose/retry prompt for a failed fill.
+   * @param {number} attempt — which retry (2 = first diagnose, 3 = second, etc.)
+   */
+  _buildDiagnosePrompt(code, sorry, errors, contextPrompt, attempt = 2) {
+    const strategyHint = attempt >= 3
+      ? '\nATTENTION: Your previous attempts have failed. Try a DIFFERENT approach — if you used `simp`, try explicit rewrites or `omega`; if you used tactic mode, try term mode.\n'
+      : '';
+
+    // Classify errors to give targeted hints
+    const classifiedErrors = errors.map(e => {
+      let hint = '';
+      const msg = e.message || '';
+      if (msg.includes('unknown identifier') || msg.includes('unknown constant')) {
+        hint = ' [HINT: wrong name — check capitalisation or use fully-qualified module path]';
+      } else if (msg.includes('type mismatch')) {
+        hint = ' [HINT: types don\'t match — check implicit arguments or use explicit coercion]';
+      } else if (msg.includes('unsolved goals')) {
+        hint = ' [HINT: proof is incomplete — add more tactic steps or use `exact?`/`apply?`]';
+      } else if (msg.includes('failed to synthesize')) {
+        hint = ' [HINT: missing typeclass instance — try adding `inferInstance` or explicit instance]';
+      } else if (msg.includes('function expected')) {
+        hint = ' [HINT: applied a non-function — check implicit vs explicit argument braces `{ }` vs `( )`]';
+      }
+      return `  line ${e.line}: ${e.message}${hint}`;
+    });
+
+    const typeHint = sorry.expectedType
+      ? `\nExpected type at this sorry: \`${sorry.expectedType}\``
+      : '';
+
+    const hypHint = sorry.hypotheses?.length
+      ? `\nLocal hypotheses:\n${sorry.hypotheses.map(h => `  ${h}`).join('\n')}`
+      : '';
+
+    return `\
+The following Lean 4 proof attempt failed. Fix the errors.
+${strategyHint}
+EXAMPLE — fixing a type-mismatch error:
+  Broken:  \`exact Nat.prime n\`    -- error: unknown identifier 'Nat.prime'
+  Fixed:   \`exact Nat.Prime n\`    -- Lean 4 uses UpperCamelCase
 
 CURRENT CODE:
 \`\`\`lean4
@@ -615,63 +639,291 @@ ${code}
 \`\`\`
 
 LEAN ERRORS:
-${errors.map(e => `  line ${e.line}: ${e.message}`).join('\n')}
+${classifiedErrors.join('\n')}
 
 TARGET SUBGOAL (near line ${sorry.line}):
 \`\`\`
 ${sorry.surroundingCode}
 \`\`\`
+${typeHint}${hypHint}
 
-${contextPrompt.slice(0, 600)}
+MATHEMATICAL CONTEXT:
+${contextPrompt}
 
 Output the COMPLETE corrected \`\`\`lean4 ... \`\`\` code block.
 Keep unrelated \`sorry\` placeholders unchanged.`;
   }
 
+  // ── Sorry parser ──────────────────────────────────────────────────────────
+
   /**
-   * Extract the theorem/lemma declaration header from Lean 4 code.
-   * Returns the part before `:= by` or `:=`.
+   * Parse the positions and context of every `sorry` in Lean code,
+   * skipping sorries inside block comments (/-  -/) and line comments (--).*
+   * Returns [{ line, col, expectedType, surroundingCode, enclosingDeclaration,
+   *            hypotheses? }].
+   *
+   * Note: nested block comments (Lean 4 supports them) are handled by the
+   * simple regex strip below, which only handles one level. Deeply-nested
+   * comments are rare in proof files.
    */
-  _parseTheoremStatement(code) {
-    if (!code) return null;
-    const assignIdx = code.search(/:=\s*(by\b|\{)/);
-    if (assignIdx >= 0) return code.slice(0, assignIdx).trim();
-    // Fallback: first meaningful lines (skip imports/opens/comments)
-    const lines = code.split('\n').filter(l => l.trim() && !l.startsWith('import') && !l.startsWith('open') && !l.startsWith('--') && !l.startsWith('/-'));
-    return lines.slice(0, 5).join('\n');
+  _parseSorries(code) {
+    // Strip block comments to avoid matching sorry inside /- ... -/
+    // Single-level only; nested /- /- -/ -/ may not strip fully (acceptable).
+    const stripped = code.replace(/\/-([\s\S]*?)-\//g, m => ' '.repeat(m.length));
+    const lines     = stripped.split('\n');
+    const origLines = code.split('\n');
+    const sorries   = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      // Remove line comment from consideration
+      const codePart = lines[i].replace(/--.*$/, '');
+      if (!/\bsorry\b/.test(codePart)) continue;
+
+      const col = codePart.indexOf('sorry');
+
+      // Extract type annotation from original line (not stripped)
+      const origLine   = origLines[i];
+      const showMatch  = origLine.match(/\bshow\s+(.+?);\s*sorry\b/);
+      const annotMatch = origLine.match(/\(\s*sorry\s*:\s*([^)]+)\)/);
+      const expectedType = (showMatch?.[1] || annotMatch?.[1] || '').trim() || null;
+
+      const ctxLines = origLines.slice(Math.max(0, i - 5), Math.min(origLines.length, i + 3));
+      const enclosingDeclaration = this._findEnclosingDeclaration(origLines, i);
+
+      sorries.push({
+        line: i + 1,
+        col,
+        expectedType,
+        surroundingCode: ctxLines.join('\n'),
+        enclosingDeclaration,
+      });
+    }
+
+    return sorries;
   }
 
   /**
-   * Extract the first ```lean4 ... ``` (or ```lean ...) block from a string.
-   * Falls back to the full string if no fence is found.
+   * Walk backward from `lineIdx` to find the nearest theorem/lemma/def/instance
+   * declaration. Returns the declaration header (up to the `:= by` line) as a
+   * string, or null if not found.
    */
-  _extractLeanBlock(text) {
-    if (!text) return '';
-    const m = text.match(/```(?:lean4?)\n([\s\S]*?)```/);
-    if (m) return m[1].trim();
-    // Sometimes the model outputs a plain ``` block
-    const m2 = text.match(/```\n([\s\S]*?)```/);
-    if (m2) return m2[1].trim();
-    return text.trim();
+  _findEnclosingDeclaration(lines, lineIdx) {
+    const DECL_RE = /^(?:private\s+|protected\s+|noncomputable\s+)*(?:theorem|lemma|def|example|instance|abbrev)\b/;
+    for (let i = lineIdx; i >= 0; i--) {
+      if (!DECL_RE.test(lines[i])) continue;
+      // Collect lines from the declaration keyword up to `:= by` / `:= {`
+      const declLines = [];
+      for (let k = i; k <= lineIdx && k < lines.length; k++) {
+        declLines.push(lines[k]);
+        if (/(:=\s*by\b|:=\s*\{)/.test(lines[k])) break;
+      }
+      return declLines.join('\n');
+    }
+    return null;
   }
 
   /**
-   * Run claude CLI in non-interactive (print) mode.
-   * @param {AbortSignal} [signal] — kill the child process on abort (B-03)
-   * @param {string}      [model]  — Anthropic model id from settings (QA P1-02).
-   *                                 Without this, the CLI path silently
-   *                                 ignored the user's model choice.
+   * Count `sorry` occurrences in non-comment code regions.
+   * Replaces the old `(code.match(/\bsorry\b/g) || []).length` which
+   * matched sorry inside comments and string literals.
    */
+  _countCodeSorries(code) {
+    const stripped = code.replace(/\/-([\s\S]*?)-\//g, m => ' '.repeat(m.length));
+    const lines    = stripped.split('\n');
+    let count = 0;
+    for (const line of lines) {
+      const codePart = line.replace(/--.*$/, '');
+      const m = codePart.match(/\bsorry\b/g);
+      if (m) count += m.length;
+    }
+    return count;
+  }
+
+  // ── Goal-state probe ──────────────────────────────────────────────────────
+
+  /**
+   * After the sketch type-checks, run a lean probe that inserts `trace_state`
+   * before each bare (unannotated) sorry. Lean outputs the goal state as an
+   * `information:` message, which we parse to populate sorry.expectedType and
+   * sorry.hypotheses.
+   *
+   * Falls back gracefully: if the probe fails or trace_state is unavailable,
+   * returns sorries from _parseSorries() without goal-state enrichment.
+   */
+  async _probeGoalStates(sketch, leanRunner, signal) {
+    const sorries = this._parseSorries(sketch);
+    if (!sorries.some(s => !s.expectedType)) return sorries; // all already annotated
+
+    try {
+      const probeCode   = this._buildProbeCode(sketch, sorries);
+      // Don't use the cache here — the probe code differs from the real sketch
+      const probeResult = await leanRunner.verify(probeCode, () => {}, signal);
+      this._parseGoalStates(probeResult.rawOutput, sorries);
+      const enriched = sorries.filter(s => s.expectedType).length;
+      if (enriched) console.log(`[LeanSFV] Goal-state probe enriched ${enriched}/${sorries.length} sorries`);
+    } catch (err) {
+      console.warn('[LeanSFV] Goal-state probe failed (non-fatal):', err.message);
+    }
+
+    return sorries;
+  }
+
+  /**
+   * Build a probe version of the sketch where each unannotated sorry is
+   * replaced with `trace_state; sorry`. Lean's `trace_state` tactic emits
+   * the current proof state as an `information:` log message.
+   */
+  _buildProbeCode(sketch, sorries) {
+    const lines      = sketch.split('\n');
+    const probeLines = [...lines];
+    for (const sorry of sorries) {
+      if (sorry.expectedType) continue;
+      const idx = sorry.line - 1;
+      if (idx >= 0 && idx < probeLines.length) {
+        // Replace the first `sorry` on this line with `trace_state; sorry`
+        probeLines[idx] = probeLines[idx].replace(/\bsorry\b/, 'trace_state; sorry');
+      }
+    }
+    return probeLines.join('\n');
+  }
+
+  /**
+   * Parse Lean's rawOutput for trace_state information messages and
+   * populate sorry.expectedType / sorry.hypotheses in-place.
+   *
+   * Expected format in rawOutput (multi-line):
+   *   "path/file.lean:LINE:COL: information: [optional case label]"
+   *   "h₁ : T₁"
+   *   "⊢ goalType"
+   */
+  _parseGoalStates(rawOutput, sorries) {
+    const outputLines = rawOutput.split('\n');
+
+    for (const sorry of sorries) {
+      if (sorry.expectedType !== null) continue;
+
+      const targetLine = sorry.line;
+
+      // Find the `information:` message emitted at sorry.line by trace_state
+      let infoIdx = -1;
+      for (let i = 0; i < outputLines.length; i++) {
+        const m = outputLines[i].match(/:(\d+):\d+: information: (.*)/);
+        if (m && parseInt(m[1], 10) === targetLine) {
+          infoIdx = i;
+          break;
+        }
+      }
+      if (infoIdx < 0) continue;
+
+      // Collect multi-line content: first line's suffix + continuation lines
+      let content = outputLines[infoIdx].replace(/.*?: information: /, '');
+      let j = infoIdx + 1;
+      while (j < outputLines.length && !outputLines[j].match(/^.*?:\d+:\d+: /)) {
+        content += '\n' + outputLines[j];
+        j++;
+      }
+
+      const infoLines = content.split('\n').filter(l => l.trim());
+      const goalIdx   = infoLines.findIndex(l => l.trim().startsWith('⊢'));
+      if (goalIdx >= 0) {
+        sorry.expectedType = infoLines[goalIdx].replace(/^\s*⊢\s*/, '').trim();
+      }
+
+      const hyps = infoLines
+        .slice(0, goalIdx >= 0 ? goalIdx : infoLines.length)
+        .filter(l => l.trim() && !/^case\b/.test(l.trim()));
+      if (hyps.length) {
+        sorry.hypotheses = hyps.map(l => l.trim());
+      }
+    }
+  }
+
+  // ── Verify cache ──────────────────────────────────────────────────────────
+
+  /**
+   * Cache wrapper around leanRunner.verify().
+   * Keyed by a hash of the source code. Avoids re-running lean on identical
+   * source (common when diagnose retries produce the same code, or when the
+   * final-verdict pass re-verifies code already verified during the fill loop).
+   */
+  async _cachedVerify(leanRunner, code, onLine, signal) {
+    const key = this._hashCode(code);
+    if (this._verifyCache.has(key)) {
+      console.log('[LeanSFV] Verify cache hit');
+      const cached = this._verifyCache.get(key);
+      // Replay output lines so the UI log stays consistent
+      if (onLine) {
+        for (const line of cached.rawOutput.split('\n')) {
+          if (line) onLine(line);
+        }
+      }
+      return cached;
+    }
+
+    const result = await leanRunner.verify(code, onLine, signal);
+
+    // Only cache when not cancelled (abort yields partial results)
+    if (!signal?.aborted) {
+      this._verifyCache.set(key, result);
+      // Keep the cache bounded — evict oldest entry above 60 items
+      if (this._verifyCache.size > 60) {
+        this._verifyCache.delete(this._verifyCache.keys().next().value);
+      }
+    }
+    return result;
+  }
+
+  /** Simple djb2-style hash of a string. Sufficient for cache keying. */
+  _hashCode(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) {
+      h = (Math.imul(h, 33) ^ str.charCodeAt(i)) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  // ── LLM dispatch ─────────────────────────────────────────────────────────
+
+  /**
+   * Unified LLM call — uses Claude CLI when available, ClaudeProvider otherwise.
+   * The provider path goes through the llm-provider abstraction layer.
+   */
+  async _callLlm(prompt, onStream, apiKey, model, systemPrompt = '', signal = undefined) {
+    if (signal?.aborted) {
+      const err = new Error('Cancelled before LLM call');
+      err.code = 'FERMAT_CANCELLED';
+      throw err;
+    }
+
+    if (this._hasClaudeCli) {
+      const fullPrompt = systemPrompt ? `${systemPrompt}\n\n---\n\n${prompt}` : prompt;
+      return this._runClaude(fullPrompt, onStream, signal, model);
+    }
+
+    // Direct API path — use provider abstraction
+    const provider = this._getOrUpdateProvider(apiKey, model);
+    const messages = [
+      ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
+      { role: 'user', content: prompt },
+    ];
+    try {
+      return await provider.complete(messages, { signal, onToken: onStream });
+    } catch (err) {
+      if (err.code === 'FERMAT_CANCELLED') throw err;
+      throw classifyAndAnnotateError(err);
+    }
+  }
+
+  /** Run claude CLI in non-interactive (print) mode. */
   _runClaude(prompt, onStream, signal = undefined, model = undefined) {
     return new Promise((resolve, reject) => {
       const args = [
-        '--print',              // non-interactive, just output the result
+        '--print',
         '--model', model || 'claude-sonnet-4-6',
       ];
 
-      // Always pipe prompt via stdin (works for any prompt length)
       const proc = spawn(this._claudePath, args, {
-        cwd: this.projectRoot,  // Claude Code auto-discovers .claude/skills/ from here
+        cwd: this.projectRoot,
         env: {
           ...process.env,
           PATH: process.env.PATH + ':/usr/local/bin:/opt/homebrew/bin',
@@ -686,7 +938,6 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       const onAbort = () => {
         abortedByCaller = true;
         try { proc.kill('SIGTERM'); } catch {}
-        // Force-kill if it doesn't exit promptly
         setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} }, 1500);
       };
       if (signal) {
@@ -704,12 +955,10 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
         stderr += data.toString();
       });
 
-      // B-06: surface stdin EPIPE instead of letting it bubble as an
-      // uncaught exception on the main process (happens when the child
-      // exits before consuming the full prompt — long prompts, early crash).
+      // B-06: surface stdin EPIPE instead of letting it bubble
       proc.stdin.on('error', (err) => {
         if (err.code === 'EPIPE') {
-          console.warn(`[ClaudeCLI] stdin EPIPE — child exited before reading full prompt`);
+          console.warn('[ClaudeCLI] stdin EPIPE — child exited before reading full prompt');
         } else {
           console.warn(`[ClaudeCLI] stdin error: ${err.message}`);
         }
@@ -718,8 +967,6 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
         proc.stdin.write(prompt);
         proc.stdin.end();
       } catch (err) {
-        // If the child has already exited, write throws synchronously —
-        // fall through; the 'close' handler will deliver the real error.
         console.warn(`[ClaudeCLI] stdin.write threw: ${err.message}`);
       }
 
@@ -749,10 +996,52 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     });
   }
 
+  // ── Lean 4 helpers ────────────────────────────────────────────────────────
+
   /**
-   * Load a skill's SKILL.md content, stripping frontmatter.
-   * @param {string} name — skill directory name (e.g. 'fermat-prove')
+   * Extract the theorem/lemma declaration header from Lean 4 code.
+   * Handles `:= by`, `:= {`, and term-mode (`:= expr`).
    */
+  _parseTheoremStatement(code) {
+    if (!code) return null;
+    // Find `:= by` or `:= {` at depth 0 (bracket-aware scan)
+    let depth = 0;
+    const tokens = [['/-', -1], ['-/', +1]]; // block comment tracking handled separately
+    const lines = code.split('\n');
+    let charCount = 0;
+    for (const line of lines) {
+      const lineStart = charCount;
+      // Check for `:= by` or `:= {` not inside a comment
+      const assignMatch = line.match(/:=\s*(by\b|\{)/);
+      if (assignMatch && depth === 0) {
+        const assignIdx = charCount + assignMatch.index;
+        return code.slice(0, assignIdx).trim();
+      }
+      charCount += line.length + 1;
+      void tokens; void depth; void lineStart;
+    }
+    // Fallback: first meaningful lines
+    const meaningful = code.split('\n').filter(
+      l => l.trim() && !l.startsWith('import') && !l.startsWith('open') &&
+           !l.startsWith('--') && !l.startsWith('/-'),
+    );
+    return meaningful.slice(0, 5).join('\n');
+  }
+
+  /**
+   * Extract the first ```lean4 ... ``` (or ```lean ...) block from a string.
+   */
+  _extractLeanBlock(text) {
+    if (!text) return '';
+    const m = text.match(/```(?:lean4?)\n([\s\S]*?)```/);
+    if (m) return m[1].trim();
+    const m2 = text.match(/```\n([\s\S]*?)```/);
+    if (m2) return m2[1].trim();
+    return text.trim();
+  }
+
+  // ── Skill loader ──────────────────────────────────────────────────────────
+
   _loadSkill(name) {
     const skillPath = path.join(this.skillsDir, name, 'SKILL.md');
     if (!fs.existsSync(skillPath)) {
@@ -761,39 +1050,31 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     return fs.readFileSync(skillPath, 'utf-8').replace(/^---[\s\S]*?---\n*/, '');
   }
 
-  /**
-   * Find the outline node matching a marker.
-   */
+  // ── Target node resolution ────────────────────────────────────────────────
+
   _findTargetNode(outline, marker) {
-    // Try by lineNumber first
     if (marker.lineNumber) {
       return outline.nodes.find(n =>
-        n.proveItMarker &&
-        Math.abs(n.lineNumber - marker.lineNumber) < 10
+        n.proveItMarker && Math.abs(n.lineNumber - marker.lineNumber) < 10,
       );
     }
-    // Try by id
     if (marker.id) {
       return outline.nodes.find(n => n.id === marker.id);
     }
-    // Try by label
     if (marker.label) {
       return outline.nodes.find(n =>
         n.labels?.some(l => marker.label.includes(l)) ||
-        marker.label.includes(n.name)
+        marker.label.includes(n.name),
       );
     }
     return null;
   }
 
+  // ── LaTeX proof extraction ────────────────────────────────────────────────
+
   /**
    * Extract \begin{proof}...\end{proof} from model output.
-   * B-12: previously this unconditionally wrapped any non-proof output in a
-   * proof env, so refusals / explanations / Lean blocks were silently inserted
-   * into the document as "proof" content. Now we only wrap output that
-   * actually looks like a LaTeX proof; otherwise we return a commented-out
-   * placeholder the user will see as a visible failure signal rather than
-   * gibberish in the PDF.
+   * B-12: only wrap output that actually looks like a LaTeX proof body.
    */
   _extractProof(text) {
     if (!text) return '';
@@ -812,27 +1093,16 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     return `% [FERMAT] The model did not produce a LaTeX proof.\n% Preview: ${preview}${preview.length >= 160 ? '…' : ''}\n\\begin{proof}\n  % TODO: model output was not a proof — inspect the model response and retry.\n\\end{proof}`;
   }
 
-  /**
-   * Heuristic — does `text` look like LaTeX proof content (not a refusal, a
-   * JSON blob, a Lean file, or prose)? Used by _extractProof (B-12).
-   */
   _looksLikeProofBody(text) {
     if (!text) return false;
-    // Refusal/explanation heuristics
     if (/\b(I cannot|I can't|I'm sorry|I apologize|As an AI)\b/i.test(text)) return false;
-    // Lean / code-block leak
     if (/^```/m.test(text) || /\btheorem\s+\w+\s*:/.test(text) || /:=\s*by\b/.test(text)) return false;
-    // Positive LaTeX signals: a backslash macro, math mode, or structural cue
     if (/\\(begin|end|QED|qed|square|blacksquare|textit|emph|cite|ref)\b/.test(text)) return true;
     if (/\$[^$]*\$/.test(text)) return true;
     if (/\\\\/.test(text)) return true;
-    // Standalone prose with no TeX at all — probably an explanation, not a proof
     return false;
   }
 
-  /**
-   * Record an accepted proof in the context assembler's memory.
-   */
   recordAcceptedProof(label, statementTeX, proofTeX) {
     this.contextAssembler.recordAcceptedProof(label, statementTeX, proofTeX);
   }
