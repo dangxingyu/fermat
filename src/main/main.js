@@ -6,6 +6,7 @@ const { FermatEngine } = require('./copilot-engine');
 const { TexCompiler } = require('./tex-compiler');
 const { SynctexBridge } = require('./synctex-bridge');
 const { LeanRunner } = require('./lean-runner');
+const { CompletionBackend } = require('./completion-backend');
 
 // ─── Persistent settings store ────────────────────────────────────────────
 // Wires into the `copilot:configure`, `tex:set-engine`, and `settings:load` IPC
@@ -48,6 +49,7 @@ let copilotEngine;
 let texCompiler;
 let synctexBridge;
 let leanRunner;
+let completionBackend;
 
 function ensureEngines() {
   if (leanRunner)  return;
@@ -57,6 +59,7 @@ function ensureEngines() {
   copilotEngine = new FermatEngine({ leanRunner });
   texCompiler   = new TexCompiler();
   synctexBridge = new SynctexBridge();
+  completionBackend = new CompletionBackend();
 
   // QA P1-01: attach proof-event forwarders ONCE, not inside createWindow.
   // createWindow used to re-attach these every time, so on macOS each close
@@ -529,6 +532,33 @@ ipcMain.handle('lean:edit-statement', async (_event, { taskId, newCode }) => {
 
 ipcMain.handle('lean:cancel-statement', async (_event, taskId) => {
   copilotEngine.cancelLeanStatement(taskId);
+});
+
+// ─── Inline completion (Cursor-style ghost text) ──────────────────
+// The renderer debounces keystrokes ~300ms and then fires `completion:request`.
+// We route it through Claude Haiku for low-latency FIM-style completions.
+// If a newer request supersedes an older one, the renderer sends
+// `completion:cancel` with the stale requestId so we can abort the API call.
+ipcMain.handle('completion:request', async (_event, args) => {
+  try {
+    // Pull API key from the persisted copilot config so completions "just work"
+    // once the user has configured their key in Settings (no extra setup needed).
+    const copilotCfg = settingsStore.get('copilot') || {};
+    const apiKey = copilotCfg?.models?.claude?.apiKey || '';
+    return await completionBackend.complete({
+      prefix: args?.prefix || '',
+      suffix: args?.suffix || '',
+      requestId: args?.requestId,
+      apiKey,
+      model: args?.model, // default = Haiku
+    });
+  } catch (err) {
+    return { error: err?.message || String(err) };
+  }
+});
+ipcMain.handle('completion:cancel', async (_event, requestId) => {
+  if (!completionBackend || !requestId) return false;
+  return completionBackend.cancel(requestId);
 });
 
 // ─── Persistent settings ───────────────────────────────────────────

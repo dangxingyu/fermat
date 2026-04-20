@@ -7,9 +7,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { latexLanguage, latexTheme } from '../utils/latex-language';
 import { registerLaTeXCompletions, LATEX_AUTO_PAIRS } from '../utils/latex-completions';
+import { registerInlineCompletions } from '../completion-provider';
 
 // ─── Register LaTeX language once at module level ──────────────────
 let languageRegistered = false;
+let inlineCompletionsRegistered = false;
 
 function ensureLanguageRegistered() {
   if (languageRegistered) return;
@@ -105,6 +107,9 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
         snippetSuggestions: 'top',
         tabCompletion: 'on',
         acceptSuggestionOnCommitCharacter: true,
+        // Enable Cursor-style ghost-text inline completions. The provider is
+        // registered below and talks to Claude Haiku via IPC.
+        inlineSuggest: { enabled: true, mode: 'prefix' },
       });
 
       editorInstanceRef.current = editor;
@@ -112,6 +117,15 @@ export default function TexEditor({ content, onChange, editorRef, proofTasks, on
 
       // Register LaTeX completions
       const completionDisposables = registerLaTeXCompletions(monaco, editor);
+
+      // Register the Claude-powered inline completion provider once per page
+      // load. It's a language-level provider, so multiple editor instances
+      // share it — that's fine since each invocation gets its own model+pos.
+      let inlineDispose = null;
+      if (!inlineCompletionsRegistered) {
+        inlineCompletionsRegistered = true;
+        inlineDispose = registerInlineCompletions(monaco, 'latex');
+      }
 
       // Content change handler
       const contentDisposable = editor.onDidChangeModelContent(() => {

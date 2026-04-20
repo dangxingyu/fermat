@@ -429,19 +429,38 @@ export default function App() {
 
   const handleSubmitAllMarkers = useCallback(() => {
     if (!outline?.nodes) return;
-    for (const node of outline.nodes) {
-      if (node.proveItMarker && !node.hasProof) {
-        submitMarker({
-          id: node.id,
-          difficulty: node.proveItMarker.difficulty,
-          label: `${node.type}: ${node.name}`,
-          lineNumber: node.lineNumber,
-          preferredModel: node.proveItMarker.preferredModel,
-          fullContent: content,  // pass full doc — backend assembles context
-        });
+    // U-09: skip markers that already have a task running/queued so
+    // double-clicking "Prove All" doesn't enqueue duplicate proofs for the
+    // same marker (which would both try to insert at the same location).
+    const busyStatuses = new Set(['running', 'sketching', 'proving', 'verifying', 'queued']);
+    const busyMarkerIds = new Set();
+    for (const [, task] of proofTasks) {
+      if (busyStatuses.has(task.status) && task.marker?.id) {
+        busyMarkerIds.add(task.marker.id);
       }
     }
-  }, [outline, content, submitMarker]);
+
+    let submitted = 0, skipped = 0;
+    for (const node of outline.nodes) {
+      if (!node.proveItMarker || node.hasProof) continue;
+      if (busyMarkerIds.has(node.id)) {
+        skipped++;
+        continue;
+      }
+      submitMarker({
+        id: node.id,
+        difficulty: node.proveItMarker.difficulty,
+        label: `${node.type}: ${node.name}`,
+        lineNumber: node.lineNumber,
+        preferredModel: node.proveItMarker.preferredModel,
+        fullContent: content,  // pass full doc — backend assembles context
+      });
+      submitted++;
+    }
+    if (skipped > 0) {
+      console.log(`[Prove All] submitted ${submitted}, skipped ${skipped} already in progress`);
+    }
+  }, [outline, content, submitMarker, proofTasks]);
 
   // Replace the `% [PROVE IT: ...]` line for a marker with an actual proof.
   // Also strips any subsequent `% SKETCH:` continuation lines so the user's

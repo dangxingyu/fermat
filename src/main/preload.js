@@ -103,6 +103,14 @@ contextBridge.exposeInMainWorld('api', {
     load: () => ipcRenderer.invoke('settings:load'),
   },
 
+  // Inline completion (Cursor-style ghost text) — requests a suggestion for
+  // the cursor position given surrounding context. `requestId` lets the
+  // renderer cancel stale requests when the user keeps typing.
+  completion: {
+    request: (args) => ipcRenderer.invoke('completion:request', args),
+    cancel:  (requestId) => ipcRenderer.invoke('completion:cancel', requestId),
+  },
+
   // Main-process log stream
   log: {
     getBuffer: () => ipcRenderer.invoke('log:get-buffer'),

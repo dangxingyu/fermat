@@ -28,6 +28,23 @@ const path = require('path');
 // Lean error line format:  /path/to/file.lean:LINE:COL: (error|warning|info): MESSAGE
 const LEAN_ERROR_RE = /^(.+?):(\d+):(\d+): (error|warning|info): (.+)$/;
 
+/**
+ * Parse a single Lean output line into a structured error, or return null.
+ * Pure function — exported so it can be unit-tested directly.
+ */
+function parseLeanErrorLine(line) {
+  if (typeof line !== 'string') return null;
+  const m = line.match(LEAN_ERROR_RE);
+  if (!m) return null;
+  return {
+    file: m[1],
+    line: parseInt(m[2], 10),
+    col:  parseInt(m[3], 10),
+    severity: m[4],
+    message:  m[5],
+  };
+}
+
 // B-10: default per-verify timeout. Lean tactics like `decide` or `simp` can
 // hang indefinitely on malformed goals; without this a single bad sorry locks
 // one slot of the maxConcurrent pool until the app restarts.
@@ -228,16 +245,8 @@ class LeanRunner {
         const cleanLine = line
           .replace(tmpFile, 'theorem.lean')
           .replace(this._workspacePath + path.sep, '');
-        const m = cleanLine.match(LEAN_ERROR_RE);
-        if (m) {
-          errors.push({
-            file: m[1],
-            line: parseInt(m[2], 10),
-            col: parseInt(m[3], 10),
-            severity: m[4],
-            message: m[5],
-          });
-        }
+        const parsed = parseLeanErrorLine(cleanLine);
+        if (parsed) errors.push(parsed);
       };
 
       let outBuf = '';
@@ -398,4 +407,4 @@ class LeanRunner {
   }
 }
 
-module.exports = { LeanRunner };
+module.exports = { LeanRunner, parseLeanErrorLine };

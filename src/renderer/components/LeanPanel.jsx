@@ -32,6 +32,20 @@ export default function LeanPanel({
   const [proofBodyExpanded, setProofBodyExpanded] = useState(false);
   // Statement editing state: false | string (current edit content)
   const [editingCode, setEditingCode] = useState(false);
+  // U-08: transient "Copied ✓" confirmation for the log Copy button
+  const [logCopied, setLogCopied] = useState(false);
+
+  const handleCopyLog = async () => {
+    const lines = leanState?.outputLines;
+    if (!lines || lines.length === 0) return;
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      setLogCopied(true);
+      setTimeout(() => setLogCopied(false), 1500);
+    } catch (err) {
+      console.warn('[LeanPanel] copy log failed:', err?.message);
+    }
+  };
 
   // Auto-scroll log to bottom as new lines arrive
   useEffect(() => {
@@ -68,6 +82,23 @@ export default function LeanPanel({
 
   // ── Derived helpers ──────────────────────────────────────────────────────
 
+  // U-11: compute sorry progress (filled / total) from whatever source we have.
+  // Prefer the sorries array on leanState (emitted by the backend at terminal
+  // events); fall back to {sorryIndex, total} on individual fill events so the
+  // header shows live progress while Phase 2 is running.
+  const sorryProgress = (() => {
+    const sorries = Array.isArray(leanState?.sorries) ? leanState.sorries : null;
+    if (sorries && sorries.length > 0) {
+      const filled = sorries.filter(s => s?.status === 'filled').length;
+      return { filled, total: sorries.length };
+    }
+    if (typeof leanState?.sorryIndex === 'number' && typeof leanState?.total === 'number') {
+      // sorryIndex is the one being worked on (0-based); filled = sorryIndex
+      return { filled: Math.max(0, leanState.sorryIndex), total: leanState.total };
+    }
+    return null;
+  })();
+
   const phaseLabel = {
     'lean-unavailable':        '⚠ Lean unavailable',
     'lean-sketching':          'Generating sketch…',
@@ -75,12 +106,18 @@ export default function LeanPanel({
     'lean-sketch-checking':    'Checking sketch…',
     'lean-sketch-ok':          'Sketch ok',
     'lean-statement-review':   '⏸ Review required',
-    'lean-filling':            `Filling subgoals…`,
-    'lean-fill-ok':            'Subgoal filled',
+    'lean-filling':            sorryProgress
+                                 ? `Filling subgoals… (${sorryProgress.filled}/${sorryProgress.total})`
+                                 : 'Filling subgoals…',
+    'lean-fill-ok':            sorryProgress
+                                 ? `Subgoal filled (${sorryProgress.filled}/${sorryProgress.total})`
+                                 : 'Subgoal filled',
     'lean-fill-retry':         'Subgoal retry…',
     'lean-fill-failed':        'Subgoal failed',
     'lean-verified':           '✓ Verified',
-    'lean-partial':            '◑ Partially verified',
+    'lean-partial':            sorryProgress
+                                 ? `◑ Partial (${sorryProgress.filled}/${sorryProgress.total} sorries filled)`
+                                 : '◑ Partially verified',
     'lean-failed':             '✗ Failed',
     'idle':                    'Ready',
   }[phase] ?? phase;
@@ -312,13 +349,23 @@ export default function LeanPanel({
       {/* ── Live lean output (hidden in review + unavailable states) ── */}
       {!isReview && !isUnavailable && (
         <div style={styles.section}>
-          <div style={styles.sectionHeader}>
-            lean output
+          <div style={{ ...styles.sectionHeader, display: 'flex', alignItems: 'center' }}>
+            <span>lean output</span>
             {leanVerified === true  && <span style={{ color: 'var(--verdigris)', marginLeft: 8 }}>✓ exit 0</span>}
             {leanVerified === false && leanErrors?.length > 0 && (
               <span style={{ color: 'var(--vermillion)', marginLeft: 8 }}>
                 ✗ {leanErrors.filter(e => e.severity === 'error').length} error{leanErrors.filter(e => e.severity === 'error').length > 1 ? 's' : ''}
               </span>
+            )}
+            {/* U-08: Copy-log-to-clipboard button. Hidden when there's no output. */}
+            {outputLines && outputLines.length > 0 && (
+              <button
+                onClick={handleCopyLog}
+                title="Copy the full lean output to clipboard"
+                style={styles.copyBtn}
+              >
+                {logCopied ? 'Copied ✓' : 'Copy'}
+              </button>
             )}
           </div>
           <div ref={logRef} style={styles.log}>
@@ -431,6 +478,17 @@ const styles = {
   chevron: {
     fontSize: 9,
     color: 'var(--text-faint)',
+  },
+  copyBtn: {
+    marginLeft: 'auto',
+    background: 'none',
+    border: '1px solid var(--border)',
+    color: 'var(--text-secondary)',
+    cursor: 'pointer',
+    padding: '1px 8px',
+    borderRadius: 3,
+    fontSize: 10,
+    fontFamily: 'var(--font-mono)',
   },
   code: {
     margin: 0,
