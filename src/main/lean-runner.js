@@ -3,17 +3,21 @@
  *
  * Manages the local Lean 4 verification environment for Fermat.
  *
- * Two verification modes:
+ * Three verification modes:
  *
- *   1. Core-only (default)
+ *   1. REPL mode (useRepl: true + usesMathlib: true + mathlibReady)
+ *      Uses a persistent `lake exe repl` process (LeanRepl).  Mathlib is
+ *      loaded once at startup; subsequent verifications reuse the warm process.
+ *      Eliminates the ~30 s mathlib cold-start cost per verification.
+ *
+ *   2. Core-only (default)
  *      Writes a temp .lean file to /tmp, runs `lean <file>` directly.
  *      Fast (~1-3 s), no lake project required, supports Lean core + Std.
  *
- *   2. Mathlib mode (usesMathlib: true)
+ *   3. Mathlib binary mode (usesMathlib: true, useRepl: false)
  *      Writes the temp file into lean-workspace/ (the lake project that has
- *      mathlib as a dependency), runs `lean <file>` with the lake project's
- *      .lake/packages available on the path.  Requires lake exe cache get
- *      to have been run first.
+ *      mathlib as a dependency), runs `lake env lean <file>`.  Requires lake
+ *      exe cache get to have been run first.
  *
  * Error parsing:
  *   Lean error format:  /path/file.lean:LINE:COL: error: MESSAGE
@@ -66,6 +70,7 @@ class LeanRunner {
     this._binaryPath = null;   // lean binary (elan shim or absolute)
     this._available = false;
     this._usesMathlib = false;
+    this._useRepl = false;
 
     // Core-only temp dir
     this._tmpDir = path.join(os.tmpdir(), 'fermat-lean');
@@ -73,10 +78,13 @@ class LeanRunner {
       fs.mkdirSync(this._tmpDir, { recursive: true });
     }
 
-    // Lake workspace (for mathlib mode)
+    // Lake workspace (for mathlib / REPL mode)
     this._workspacePath = resolveWorkspacePath();
     this._mathlibReady = false;
     this._detectMathlibCache();
+
+    // Persistent REPL — created lazily when useRepl + mathlib are both enabled
+    this._repl = null;
   }
 
   // ─── Binary detection ──────────────────────────────────────────────────────
@@ -84,7 +92,8 @@ class LeanRunner {
   /**
    * Detect the lean binary.
    * @param {string} [override] — explicit path from settings (may be empty)
-   * @returns {{ available: boolean, path: string|null, version: string|null }}
+   * @returns {{ available: boolean, path: string|null, version: string|null,
+   *             replAvailable: boolean, mode: string }}
    */
   detect(override) {
     const candidates = [
@@ -100,28 +109,53 @@ class LeanRunner {
         this._binaryPath = candidate;
         this._available = true;
         console.log(`[LeanRunner] lean found at ${candidate} (${version.split('\n')[0]})`);
-        return { available: true, path: candidate, version };
+        return { available: true, path: candidate, version,
+                 replAvailable: this._repl?.isReady ?? false, mode: this.mode };
       }
     }
 
     this._binaryPath = null;
     this._available = false;
     console.warn('[LeanRunner] lean binary not found');
-    return { available: false, path: null, version: null };
+    return { available: false, path: null, version: null,
+             replAvailable: false, mode: 'binary' };
   }
 
   /**
    * Set whether to use the mathlib lake workspace for verification.
-   * Call this when the user changes the mathlib setting.
+   * Also manages REPL lifecycle when useRepl is enabled.
    */
   setUsesMathlib(flag) {
     this._usesMathlib = !!flag;
-    if (flag) this._detectMathlibCache();
+    if (flag) {
+      this._detectMathlibCache();
+      if (this._useRepl && this._mathlibReady) this._ensureRepl();
+    } else {
+      this._stopRepl();
+    }
+  }
+
+  /**
+   * Enable or disable the persistent REPL for mathlib verification.
+   * When enabled and mathlib is ready, the REPL starts asynchronously.
+   */
+  setUseRepl(flag) {
+    this._useRepl = !!flag;
+    if (this._useRepl && this._usesMathlib && this._mathlibReady) {
+      this._ensureRepl();
+    } else if (!this._useRepl) {
+      this._stopRepl();
+    }
   }
 
   get isAvailable()    { return this._available; }
   get binaryPath()     { return this._binaryPath; }
   get mathlibReady()   { return this._mathlibReady; }
+  /** 'repl' when the REPL is active, 'binary' otherwise. */
+  get mode() {
+    const useMathlib = this._usesMathlib && this._mathlibReady;
+    return (this._useRepl && useMathlib && this._repl?.isReady) ? 'repl' : 'binary';
+  }
 
   // ─── Verification ─────────────────────────────────────────────────────────
 
@@ -162,6 +196,12 @@ class LeanRunner {
     }
 
     const useMathlib = this._usesMathlib && this._mathlibReady;
+
+    // REPL path: persistent process with Mathlib loaded once — avoids cold starts
+    if (this._useRepl && useMathlib && this._repl?.isReady) {
+      return this._repl.verify(leanSource, onLine, signal);
+    }
+
     return useMathlib
       ? this._verifyWithMathlib(leanSource, onLine, signal)
       : this._verifyCoreOnly(leanSource, onLine, signal);
@@ -305,6 +345,26 @@ class LeanRunner {
         else signal.addEventListener('abort', onAbort, { once: true });
       }
     });
+  }
+
+  // ─── REPL lifecycle ───────────────────────────────────────────────────────
+
+  _ensureRepl() {
+    if (this._repl?.isReady || this._repl?._startPromise) return;
+    const { LeanRepl } = require('./lean-repl');
+    this._repl = new LeanRepl(this._workspacePath, {
+      lakeBin:       this._resolveLakeBin(),
+      usesMathlib:   true,
+    });
+    this._repl.start().catch(err => {
+      console.error('[LeanRunner] REPL start failed:', err.message);
+    });
+  }
+
+  _stopRepl() {
+    if (!this._repl) return;
+    this._repl.stop().catch(() => {});
+    this._repl = null;
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

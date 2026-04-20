@@ -20,7 +20,7 @@ const settingsStore = new Store({
       maxConcurrent: 3,
       autoInlineDifficulty: ['Easy'],
       verificationMode: 'off',
-      lean: { binaryPath: '', maxRetries: 3, usesMathlib: false },
+      lean: { binaryPath: '', maxRetries: 3, usesMathlib: false, useRepl: false },
     },
     texEngine: 'tectonic',
   },
@@ -162,6 +162,7 @@ function createWindow() {
       const storedLean = storedCopilot.lean || {};
       leanRunner.detect(storedLean.binaryPath || undefined);
       leanRunner.setUsesMathlib(!!storedLean.usesMathlib);
+      leanRunner.setUseRepl(!!storedLean.useRepl);
     }
     const storedEngine = settingsStore.get('texEngine');
     if (storedEngine) texCompiler.setEngine(storedEngine);
@@ -462,6 +463,12 @@ ipcMain.handle('copilot:configure', async (_event, config) => {
   // Re-detect lean binary whenever settings change (user may have updated leanPath)
   if (config?.lean?.binaryPath !== undefined) {
     leanRunner.detect(config.lean.binaryPath || undefined);
+  }
+  if (config?.lean?.usesMathlib !== undefined) {
+    leanRunner.setUsesMathlib(!!config.lean.usesMathlib);
+  }
+  if (config?.lean?.useRepl !== undefined) {
+    leanRunner.setUseRepl(!!config.lean.useRepl);
   }
 });
 
