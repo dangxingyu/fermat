@@ -538,6 +538,7 @@ export default function App() {
         lineNumber: node.lineNumber,
         preferredModel: node.proveItMarker.preferredModel,
         fullContent: activeTab?.content || '',
+        filePath: activeTab?.filePath || null,
       });
       submitted++;
     }

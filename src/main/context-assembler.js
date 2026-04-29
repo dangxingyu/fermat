@@ -10,7 +10,8 @@
  *   3. TARGET       — the full statement to be proved
  *   4. DEPENDENCIES — full statements of everything the target \ref's
  *   5. PROVED FACTS — proofs of dependencies (if already proved/accepted)
- *   6. FULL TEXT     — the complete document (models have big context windows, use them)
+ *   6. KNOWLEDGE     — optional project ledger of sourced facts / conjectures
+ *   7. FULL TEXT     — the complete document (models have big context windows, use them)
  *
  * The assembler also maintains a "proof memory" — proofs that have been accepted by
  * the user are stored and can be referenced by subsequent proof tasks.
@@ -57,8 +58,9 @@ class ContextAssembler {
    * @param {object} targetNode — the node to prove (from outline.nodes)
    * @returns {object} structured context
    */
-  assembleForProof(outline, targetNode) {
+  assembleForProof(outline, targetNode, options = {}) {
     const { nodes, edges, preamble, theoremStyles, labelToNode, fullText } = outline;
+    const { knowledgeLedger = null } = options;
 
     // ─── 1. Theory map: concise summary of the whole document ───
     const theoryMap = this._buildTheoryMap(nodes);
@@ -137,6 +139,8 @@ class ContextAssembler {
 
       knownProofs,
 
+      knowledgeLedger,
+
       fullText,
     };
   }
@@ -198,6 +202,18 @@ ${ctx.target.userSketch}
       sections.push(`<known_proofs>\n${proofs}\n</known_proofs>`);
     }
 
+    // Project knowledge ledger: long-lived, human/agent-maintained facts that
+    // are not necessarily proved in the current document. The skills enforce
+    // use_policy, so including this context should guide planning without
+    // licensing unsupported facts in the final proof.
+    if (ctx.knowledgeLedger?.content) {
+      const ledgerPath = this._escapeXmlAttr(ctx.knowledgeLedger.path || '');
+      const truncated = ctx.knowledgeLedger.truncated ? ' truncated="true"' : '';
+      sections.push(`<knowledge_ledger path="${ledgerPath}"${truncated}>
+${ctx.knowledgeLedger.content}
+</knowledge_ledger>`);
+    }
+
     // Full document
     sections.push(`<full_document>\n${ctx.fullText}\n</full_document>`);
 
@@ -233,6 +249,14 @@ ${ctx.target.userSketch}
       }
     }
     return deps;
+  }
+
+  _escapeXmlAttr(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 }
 

@@ -142,6 +142,32 @@ describe('ContextAssembler — formatAsPrompt', () => {
     expect(prompt).toContain('<user_sketch>');
     expect(prompt).toContain('Induction on n.');
   });
+
+  it('includes project knowledge ledger content when supplied', () => {
+    const tex = [
+      '\\begin{document}',
+      '\\begin{theorem}',
+      '\\label{thm:x}',
+      '  Claim.',
+      '\\end{theorem}',
+      '% [PROVE IT: Medium]',
+      '\\end{document}',
+    ].join('\n');
+    const { outline, target } = buildOutline(tex, 'thm:x');
+    expect(target).toBeTruthy();
+    const ca = new ContextAssembler();
+    const ctx = ca.assembleForProof(outline, target, {
+      knowledgeLedger: {
+        path: '/tmp/project/"ledger"&notes.md',
+        content: '- fact: T1_SOURCE_BACKED with cite_directly',
+        truncated: true,
+      },
+    });
+    const prompt = ca.formatAsPrompt(ctx);
+    expect(prompt).toContain('<knowledge_ledger path="/tmp/project/&quot;ledger&quot;&amp;notes.md" truncated="true">');
+    expect(prompt).toContain('T1_SOURCE_BACKED with cite_directly');
+    expect(prompt.indexOf('<knowledge_ledger')).toBeLessThan(prompt.indexOf('<full_document>'));
+  });
 });
 
 describe('ContextAssembler — proof memory (recordAcceptedProof)', () => {

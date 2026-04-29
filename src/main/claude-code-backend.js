@@ -139,12 +139,13 @@ class ClaudeCodeBackend {
       throw new Error(`Could not find theorem/lemma for marker: ${marker.label}`);
     }
 
-    const ctx = this.contextAssembler.assembleForProof(outline, targetNode);
+    const knowledgeLedger = this._loadKnowledgeLedger(marker);
+    const ctx = this.contextAssembler.assembleForProof(outline, targetNode, { knowledgeLedger });
     const contextPrompt = this.contextAssembler.formatAsPrompt(ctx);
 
     const difficulty = targetNode.proveItMarker?.difficulty || 'Medium';
     const whichPath = this._hasClaudeCli ? 'Claude CLI' : 'direct API';
-    console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${whichPath} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length}`);
+    console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${whichPath} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length} | ledger=${knowledgeLedger?.path ? 'yes' : 'no'}`);
 
     if (!this._hasClaudeCli && !options.apiKey) {
       const err = new Error('No API key configured and Claude Code CLI not available.');
@@ -160,35 +161,47 @@ class ClaudeCodeBackend {
   }
 
   /**
-   * Unified three-phase LaTeX prove pipeline (Q-01).
-   * Phases: Sketch (Medium/Hard) → Prove → Verify + 1 self-correction.
+   * Unified natural-language prove pipeline.
+   * Phases: Knowledge review (Medium/Hard) → Plan (Medium/Hard) →
+   * Prove → Verify + 1 self-correction.
    */
   async _proveThreePhase(contextPrompt, difficulty, targetNode, options) {
     const { onStream, apiKey, model, signal } = options;
     const results = {};
+    let workingContext = contextPrompt;
 
     if (difficulty !== 'Easy') {
-      console.log('[Prove] Phase 1/3: sketch (fermat-sketch skill)');
+      console.log('[Prove] Phase 1/4: knowledge review (fermat-knowledge skill)');
+      const knowledgeSkill = this._loadSkill('fermat-knowledge');
+      const tk0 = Date.now();
+      results.knowledge = await this._callLlm(contextPrompt, onStream, apiKey, model, knowledgeSkill, signal);
+      workingContext += `\n\n${this._asTaggedBlock('knowledge_review', results.knowledge)}`;
+      console.log(`[Prove] Knowledge review done (${Date.now() - tk0}ms, ${results.knowledge.length}ch)`);
+
+      console.log('[Prove] Phase 2/4: plan (fermat-sketch skill)');
       const sketchSkill = this._loadSkill('fermat-sketch');
       const t0 = Date.now();
-      results.sketch = await this._callLlm(contextPrompt, onStream, apiKey, model, sketchSkill, signal);
+      results.sketch = await this._callLlm(workingContext, onStream, apiKey, model, sketchSkill, signal);
       console.log(`[Prove] Sketch done (${Date.now() - t0}ms, ${results.sketch.length}ch)`);
     }
 
-    console.log(`[Prove] Phase ${difficulty === 'Easy' ? '1/1' : '2/3'}: prove (fermat-prove skill)`);
+    console.log(`[Prove] Phase ${difficulty === 'Easy' ? '1/1' : '3/4'}: prove (fermat-prove skill)`);
     const proveSkill = this._loadSkill('fermat-prove');
-    let proveInput = contextPrompt;
+    let proveInput = workingContext;
+    const proofPlanBlock = results.sketch
+      ? this._asTaggedBlock('proof_plan', results.sketch)
+      : '';
     if (results.sketch) {
-      proveInput += `\n\n<proof_sketch>\n${results.sketch}\n</proof_sketch>`;
+      proveInput += `\n\n${proofPlanBlock}`;
     }
     const tp0 = Date.now();
     let proofOutput = await this._callLlm(proveInput, onStream, apiKey, model, proveSkill, signal);
     console.log(`[Prove] Proof draft done (${Date.now() - tp0}ms, ${proofOutput.length}ch)`);
 
     if (!options.skipVerify) {
-      console.log('[Prove] Phase 3/3: verify (fermat-verify skill)');
+      console.log(`[Prove] Phase ${difficulty === 'Easy' ? 'verify' : '4/4'}: verify (fermat-verify skill)`);
       const verifySkill = this._loadSkill('fermat-verify');
-      const verifyInput = `${contextPrompt}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
+      const verifyInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
       const tv0 = Date.now();
       results.verdict = await this._callLlm(verifyInput, onStream, apiKey, model, verifySkill, signal);
       const verdictTag = results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown';
@@ -199,12 +212,12 @@ class ClaudeCodeBackend {
       if (needsRetry) {
         console.log('[Prove] Verification failed — retrying with feedback');
         const retryInput =
-          `${contextPrompt}\n\n<previous_attempt>\n${proofOutput}\n</previous_attempt>\n\n` +
+          `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n<previous_attempt>\n${proofOutput}\n</previous_attempt>\n\n` +
           `<verification_feedback>\n${results.verdict}\n</verification_feedback>\n\n` +
-          `The previous proof attempt FAILED verification. Please write a corrected proof addressing the issues identified above.`;
+          `The previous proof attempt FAILED verification. Please write a corrected proof addressing the issues identified above. Do not use any fact marked prove_inline, prove_as_sublemma, research_before_use, or do_not_use unless this proof first establishes the fact under the target assumptions.`;
         proofOutput = await this._callLlm(retryInput, onStream, apiKey, model, proveSkill, signal);
 
-        const reVerifyInput = `${contextPrompt}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
+        const reVerifyInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
         results.verdict = await this._callLlm(reVerifyInput, onStream, apiKey, model, verifySkill, signal);
         console.log(`[Prove] Re-verify verdict: ${results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown'}`);
       }
@@ -1039,6 +1052,77 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     const m2 = text.match(/```\n([\s\S]*?)```/);
     if (m2) return m2[1].trim();
     return text.trim();
+  }
+
+  // ── Project knowledge ledger ─────────────────────────────────────────────
+
+  /**
+   * Load an optional project-level knowledge ledger.
+   *
+   * Search order:
+   *   1. marker.knowledgeLedgerPath, if provided
+   *   2. .fermat/knowledge.md in marker.projectDir
+   *   3. .fermat/knowledge.md in marker.filePath's directory or its ancestors
+   *
+   * The ledger is read-only here. Skills may propose updates, but writes should
+   * be explicit user actions so an LLM cannot silently mutate mathematical
+   * assumptions behind the user's back.
+   */
+  _loadKnowledgeLedger(marker = {}) {
+    const MAX_CHARS = 30_000;
+
+    const directPath = typeof marker.knowledgeLedgerPath === 'string'
+      ? marker.knowledgeLedgerPath
+      : null;
+    const startDirs = [];
+
+    if (typeof marker.projectDir === 'string' && marker.projectDir) {
+      startDirs.push(marker.projectDir);
+    }
+    if (typeof marker.filePath === 'string' && marker.filePath) {
+      startDirs.push(path.dirname(marker.filePath));
+    }
+
+    const candidates = [];
+    if (directPath) candidates.push(path.resolve(directPath));
+
+    const seenDirs = new Set();
+    for (const start of startDirs) {
+      let dir = path.resolve(start);
+      for (let depth = 0; depth < 8; depth++) {
+        if (seenDirs.has(dir)) break;
+        seenDirs.add(dir);
+        candidates.push(path.join(dir, '.fermat', 'knowledge.md'));
+        if (fs.existsSync(path.join(dir, '.git'))) break;
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+    }
+
+    for (const candidate of candidates) {
+      try {
+        if (!candidate || !fs.existsSync(candidate)) continue;
+        const raw = fs.readFileSync(candidate, 'utf-8');
+        const truncated = raw.length > MAX_CHARS;
+        const content = truncated
+          ? raw.slice(0, MAX_CHARS) + '\n\n[FERMAT: knowledge ledger truncated for prompt budget]\n'
+          : raw;
+        console.log(`[Knowledge] Loaded ledger: ${candidate}${truncated ? ' (truncated)' : ''}`);
+        return { path: candidate, content, truncated };
+      } catch (err) {
+        console.warn(`[Knowledge] Failed to read ledger ${candidate}: ${err.message}`);
+      }
+    }
+
+    return null;
+  }
+
+  _asTaggedBlock(tagName, text) {
+    const body = String(text || '').trim();
+    const tagPattern = new RegExp(`<${tagName}(\\s|>)`);
+    if (tagPattern.test(body)) return body;
+    return `<${tagName}>\n${body}\n</${tagName}>`;
   }
 
   // ── Skill loader ──────────────────────────────────────────────────────────
