@@ -2,6 +2,8 @@
 
 > *The proof is no longer too large for the margin.*
 
+[Project homepage](https://dangxingyu.github.io/fermat/) · [GitHub repository](https://github.com/dangxingyu/fermat)
+
 Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, add a `% [PROVE IT: Easy|Medium|Hard]` marker, and let Claude prove it — with a full 3-phase pipeline: sketch → prove → verify.
 
 ---
