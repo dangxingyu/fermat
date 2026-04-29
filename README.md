@@ -4,7 +4,7 @@
 
 [Project homepage](https://dangxingyu.github.io/fermat/) · [GitHub repository](https://github.com/dangxingyu/fermat)
 
-Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, add a `% [PROVE IT: Easy|Medium|Hard]` marker, and let Claude prove it — with a full 3-phase pipeline: sketch → prove → verify.
+Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, add a `% [PROVE IT: Easy|Medium|Hard]` marker, and let Claude plan, prove, and audit the proof — with optional Lean 4 verification.
 
 ---
 
@@ -18,7 +18,7 @@ Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, a
 ## Installation
 
 ```bash
-git clone https://github.com/TODO/fermat.git   # TODO(xingyu): fill repo URL
+git clone https://github.com/dangxingyu/fermat.git
 cd fermat
 npm install
 ```
@@ -171,9 +171,11 @@ fermat/
 │       ├── components/        # App, TexEditor, PdfViewer, ProofReviewPanel …
 │       └── hooks/             # useCopilot, useOutline
 ├── .claude/skills/            # Fermat skill prompts
-│   ├── fermat-sketch/         # Phase 1: plan the proof strategy
-│   ├── fermat-prove/          # Phase 2: write the full LaTeX proof
-│   └── fermat-verify/         # Phase 3: LLM-as-judge verification
+│   ├── fermat-knowledge/      # Review available facts and proof obligations
+│   ├── fermat-sketch/         # Emit a fact-tiered proof plan
+│   ├── fermat-prove/          # Write the full LaTeX proof
+│   ├── fermat-verify/         # Audit logic, references, and hidden facts
+│   └── fermat-research/       # Literature-review helper for ledger entries
 ├── examples/                  # Sample .tex documents with PROVE IT markers
 ├── fermat-skills-workspace/   # Eval benchmark results
 └── landing/                   # Static landing page
@@ -183,10 +185,13 @@ fermat/
 
 For each `% [PROVE IT: X]` marker:
 
-1. **Sketch** *(Medium/Hard only)* — `fermat-sketch` plans the approach, surfaces prerequisites.
-2. **Prove** — `fermat-prove` writes a rigorous `\begin{proof}…\end{proof}` block using full document context.
-3. **Verify** — `fermat-verify` checks the proof; if it fails, Fermat retries with the feedback (once).
-4. Easy proofs are auto-inlined; Medium/Hard go to the **Review Panel**.
+1. **Knowledge review** *(Medium/Hard only)* — `fermat-knowledge` audits the document context and optional `.fermat/knowledge.md` ledger.
+2. **Plan** *(Medium/Hard only)* — `fermat-sketch` emits a machine-readable proof plan with fact tiers, use policies, and proof obligations.
+3. **Prove** — `fermat-prove` writes a rigorous `\begin{proof}…\end{proof}` block, proving candidate obligations before using them.
+4. **Verify** — `fermat-verify` checks logic, references, hidden nontrivial facts, and tier/use-policy compliance; if it fails, Fermat retries with the feedback once.
+5. Easy proofs are auto-inlined; Medium/Hard go to the **Review Panel**.
+
+For source-backed facts, candidate lemmas, failed proof attempts, and likely-false routes, create a project ledger at `.fermat/knowledge.md`. See [`docs/NATURAL-LANGUAGE-PROOF-PIPELINE.md`](docs/NATURAL-LANGUAGE-PROOF-PIPELINE.md) for the schema.
 
 The backend prefers the **Claude Code CLI** (`claude --print`) for agent-level reasoning; it falls back to the **Anthropic SDK** (direct API) when the CLI is not installed.
 

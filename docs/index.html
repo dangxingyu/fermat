@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Fermat — a LaTeX theorem-proving editor with AI verification</title>
-  <meta name="description" content="Write theorems in LaTeX, mark what needs proving, and let Claude sketch, prove, and verify — with optional Lean 4 formal verification." />
+  <title>Fermat — a LaTeX theorem-proving editor with auditable AI proofs</title>
+  <meta name="description" content="Write theorems in LaTeX, mark what needs proving, and let Fermat plan, prove, audit dependencies, and optionally verify in Lean 4." />
 
   <!-- Fonts: Fraunces (editorial humanist serif) + Hanken Grotesk (UI) + JetBrains Mono -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -574,8 +574,8 @@
       font-weight: 500;
     }
 
-    /* ─── Waitlist ───────────────────────────────────────────────────── */
-    .waitlist {
+    /* ─── Get started ────────────────────────────────────────────────── */
+    .get-started-card {
       max-width: 720px;
       margin: 0 auto;
       padding: 64px 48px;
@@ -584,7 +584,7 @@
       border-radius: var(--radius-xl);
       text-align: center;
     }
-    .waitlist h2 {
+    .get-started-card h2 {
       font-family: var(--font-display);
       font-weight: 500;
       font-size: clamp(28px, 4vw, 40px);
@@ -593,41 +593,40 @@
       color: var(--ink);
       margin-bottom: 14px;
     }
-    .waitlist h2 .italic { font-style: italic; font-weight: 400; color: var(--ink-83); }
-    .waitlist p {
+    .get-started-card h2 .italic { font-style: italic; font-weight: 400; color: var(--ink-83); }
+    .get-started-card p {
       font-size: 16px;
       color: var(--ink-60);
       max-width: 440px;
       margin: 0 auto 32px;
       line-height: 1.55;
     }
-    .waitlist-form {
-      display: flex; gap: 10px;
-      max-width: 440px;
-      margin: 0 auto;
-    }
-    .waitlist-form input {
-      flex: 1;
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-sm);
-      padding: 10px 14px;
-      color: var(--ink);
-      font-family: var(--font-ui);
-      font-size: 14px;
-      outline: none;
-      transition: border-color 0.15s, box-shadow 0.2s;
-    }
-    .waitlist-form input::placeholder { color: var(--ink-40); }
-    .waitlist-form input:focus {
-      border-color: var(--border-strong);
-      box-shadow: var(--focus-shadow);
-    }
     .form-note {
       font-size: 12px;
       color: var(--ink-40);
       margin-top: 12px;
       font-family: var(--font-mono);
+    }
+    .install-command {
+      max-width: 520px;
+      margin: 0 auto 22px;
+      padding: 16px 18px;
+      text-align: left;
+      background: var(--bg-sunk);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.7;
+      color: var(--ink-83);
+      overflow-x: auto;
+    }
+    .install-command .muted { color: var(--ink-40); }
+    .install-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
     }
 
     /* ─── Footer ─────────────────────────────────────────────────────── */
@@ -822,9 +821,8 @@
       .features { grid-template-columns: 1fr; }
       .testimonials { grid-template-columns: repeat(2, 1fr); }
       .hero-glyph { display: none; }
-      .waitlist { padding: 48px 28px; }
-      .waitlist-form { flex-direction: column; }
-      .waitlist-form input, .waitlist-form button { width: 100%; }
+      .get-started-card { padding: 48px 28px; }
+      .install-actions .btn { width: 100%; justify-content: center; }
       .code-card pre { font-size: 12.5px; padding: 20px; }
       footer { padding: 32px 24px 24px; }
       .footer-inner { flex-direction: column; align-items: flex-start; }
@@ -852,7 +850,7 @@
       <a href="#features">Features</a>
       <a href="#how-it-works">How it works</a>
       <a href="https://github.com/dangxingyu/fermat">GitHub</a>
-      <a href="#waitlist" class="btn btn-pill">Early access</a>
+      <a href="#getting-started" class="btn btn-pill">Get started</a>
     </div>
     <button class="nav-hamburger" id="hamburger" aria-label="Toggle menu">≡</button>
   </nav>
@@ -862,25 +860,25 @@
     <div class="hero-glyph glyph-integral">∫</div>
     <div class="hero-glyph glyph-therefore">∴</div>
     <div class="container hero reveal">
-      <span class="eyebrow">AI proof assistant · Lean 4 verified</span>
+      <span class="eyebrow">LaTeX proofs · auditable AI · optional Lean 4</span>
       <h1>
         Write theorems.<br>
         <span class="italic">Prove</span> them.<span class="qed">∎</span>
       </h1>
       <p class="tagline">
-        A LaTeX editor that reads your definitions, drafts rigorous proofs with Claude,
-        and — when you want certainty — formally verifies them in Lean&nbsp;4.
+        A LaTeX editor that reads your definitions, keeps a project knowledge ledger,
+        drafts rigorous proofs with Claude, and lets a verifier audit every nontrivial fact.
       </p>
       <div class="hero-actions">
-        <a class="btn btn-primary" href="https://github.com/dangxingyu/fermat/releases">
-          Download for macOS
+        <a class="btn btn-primary" href="#getting-started">
+          Run Fermat locally
           <span aria-hidden="true">→</span>
         </a>
         <a class="btn btn-ghost" href="https://github.com/dangxingyu/fermat">
           View on GitHub
         </a>
       </div>
-      <p class="platform-note">macOS · Windows · Linux — MIT license</p>
+      <p class="platform-note">Electron app · LaTeX + PDF · optional Lean verification · MIT license</p>
     </div>
   </section>
 
@@ -916,11 +914,11 @@
       </div>
       <div class="screenshot-body">
         <!-- TODO(xingyu): replace with actual screenshot at docs/screenshot.png -->
-        <img src="../docs/screenshot.png" alt="Fermat editor — Monaco LaTeX editor, PDF preview, proof review panel"
+        <img src="screenshot.png" alt="Fermat editor — Monaco LaTeX editor, PDF preview, proof review panel"
              onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
         <div class="screenshot-placeholder" style="display: none;">
           <div class="glyph">∎</div>
-          <div class="label">Editor · PDF · Lean — coming together soon</div>
+          <div class="label">Editor · PDF · proof review · Lean</div>
         </div>
       </div>
     </div>
@@ -930,11 +928,12 @@
   <section id="features">
     <div class="container">
       <div class="section-head reveal">
-        <div class="eyebrow">Four tools, one editor</div>
+        <div class="eyebrow">Proof workbench</div>
         <h2>Built for the way <span class="italic">mathematicians actually work.</span></h2>
         <p>
           Fermat treats proof-writing as a first-class workflow, not a chat interface.
-          Every feature is designed around the LaTeX document you're already writing.
+          The agent works inside the LaTeX document you're already writing, with explicit
+          dependency hygiene instead of hand-wavy "standard facts."
         </p>
       </div>
 
@@ -945,17 +944,17 @@
           <p>
             A Monaco-powered editor with LaTeX syntax highlighting, auto-closing environments,
             and live PDF preview with SyncTeX. Cmd+click anywhere in the PDF to jump to the
-            source line — and vice versa.
+            source line — and <code>Cmd+K</code> inserts a proof marker.
           </p>
         </div>
 
         <div class="feature-card reveal">
-          <div class="feature-badge">P</div>
-          <h3>AI proof assistant</h3>
+          <div class="feature-badge">K</div>
+          <h3>Proofs with a memory</h3>
           <p>
-            Mark a theorem with <code>% [PROVE IT: Hard]</code>. Claude runs a three-phase
-            pipeline — <em>sketch</em> the approach, <em>prove</em> it rigorously, then
-            <em>verify</em> the result. Context-aware: it reads your definitions and prior lemmas.
+            Add a project ledger at <code>.fermat/knowledge.md</code> for source-backed facts,
+            likely lemmas, speculative conjectures, and known false routes. Fermat passes that
+            ledger into the proof pipeline instead of forgetting what the project knows.
           </p>
         </div>
 
@@ -970,13 +969,12 @@
         </div>
 
         <div class="feature-card reveal">
-          <div class="feature-badge">⌘</div>
-          <h3>Smart completion</h3>
+          <div class="feature-badge">R</div>
+          <h3>Review before insertion</h3>
           <p>
-            Inline auto-completion that understands LaTeX — environments, references,
-            citations, math symbols — all with Cursor-style ergonomics.
-            <code>Cmd+K</code> inserts a proof marker; <code>Cmd+'</code> forward-searches
-            to the PDF.
+            Easy proofs can go inline. Medium and Hard proofs land in a review panel with the
+            generated LaTeX, plan, and verifier verdict visible before anything is written back
+            to your file.
           </p>
         </div>
       </div>
@@ -988,11 +986,11 @@
     <div class="container">
       <div class="section-head reveal">
         <div class="eyebrow">How it works</div>
-        <h2>One comment is all it takes.</h2>
+        <h2>One comment starts an auditable proof task.</h2>
         <p>
           Fermat watches your document for <code style="font-family: var(--font-mono); color: var(--gold);">[PROVE IT: …]</code>
-          markers. Easy proofs auto-inline. Medium and Hard proofs land in a review panel
-          where you can read, edit, and accept — or reject — before they touch your document.
+          markers. For substantial proofs it first audits what is already known, then writes a
+          machine-readable plan, then proves, then verifies the dependencies it used.
         </p>
       </div>
 
@@ -1009,22 +1007,23 @@
 For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
 <span class="cmd">$\sum_{a \in A} \frac{1}{a \log a} \leq 1 + O(1/\log x)$</span>.
 <span class="kw">\end</span>{<span class="env">theorem</span>}
-<span class="marker hl">% [PROVE IT: Hard]</span>        <span class="cmt">← Fermat queues a three-phase proof task</span>
+<span class="marker hl">% [PROVE IT: Hard]</span>        <span class="cmt">← Fermat queues a ledger-aware proof task</span>
 <span class="cmt">% SKETCH: Reduce to a critical family parametrised by the</span>
 <span class="cmt">%   anatomy-of-integers Markov structure (Price 2026).</span>
 
-<span class="cmt">┌──────────────────────────────────────────────────────────┐</span>
-<span class="cmt">│ 1.  </span><span class="kw">fermat-sketch</span><span class="cmt">   — plan the strategy</span>
-<span class="cmt">│ 2.  </span><span class="kw">fermat-prove</span><span class="cmt">    — write the </span><span class="env">\begin{proof}…\end{proof}</span>
-<span class="cmt">│ 3.  </span><span class="kw">fermat-verify</span><span class="cmt">   — judge correctness; retry on failure</span>
-<span class="cmt">│ 4.  </span><span class="kw">lean-4</span><span class="cmt">          — optional formal verification </span><span class="env">✓</span>
-<span class="cmt">└──────────────────────────────────────────────────────────┘</span></pre>
+<span class="cmt">┌──────────────────────────────────────────────────────────────┐</span>
+<span class="cmt">│ 1.  </span><span class="kw">fermat-knowledge</span><span class="cmt"> — audit document facts + knowledge ledger</span>
+<span class="cmt">│ 2.  </span><span class="kw">fermat-sketch</span><span class="cmt">    — emit fact tiers and proof obligations</span>
+<span class="cmt">│ 3.  </span><span class="kw">fermat-prove</span><span class="cmt">     — prove obligations before using them</span>
+<span class="cmt">│ 4.  </span><span class="kw">fermat-verify</span><span class="cmt">    — audit hidden facts; retry on failure</span>
+<span class="cmt">│ 5.  </span><span class="kw">lean-4</span><span class="cmt">           — optional formal verification </span><span class="env">✓</span>
+<span class="cmt">└──────────────────────────────────────────────────────────────┘</span></pre>
       </div>
 
       <p class="code-caption reveal">
         Click <strong>Submit&nbsp;All</strong> in the toolbar. Easy proofs appear instantly inline.
-        Hard proofs wait for your review — with the generated LaTeX, the sketch, and the verdict
-        all visible before anything is written to your file.
+        Hard proofs wait for your review — with the generated LaTeX, the proof plan, and the
+        verifier verdict all visible before anything is written to your file.
       </p>
     </div>
   </section>
@@ -1155,30 +1154,31 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
       </div>
 
       <p class="testimonials-footnote reveal">
-        <span class="mark">※</span>Selected early-access testimonials.
+        <span class="mark">※</span>Historical endorsements reconstructed with mathematically irresponsible confidence.
       </p>
     </div>
   </section>
 
-  <!-- ─── Waitlist ─────────────────────────────────────────────────── -->
-  <section id="waitlist">
+  <!-- ─── Get started ───────────────────────────────────────────────── -->
+  <section id="getting-started">
     <div class="container">
-      <div class="waitlist reveal">
-        <div class="eyebrow" style="justify-content: center; display: inline-flex;">Early access</div>
-        <h2>Be the first to <span class="italic">verify.</span></h2>
+      <div class="get-started-card reveal">
+        <div class="eyebrow" style="justify-content: center; display: inline-flex;">Get started</div>
+        <h2>Clone it, run it, mark a theorem.</h2>
         <p>
-          Get notified when the first public release drops, and help shape what ships next.
-          No drip campaigns, no spam.
+          Fermat is MIT-licensed and open on GitHub. Run the Electron app locally,
+          then add <code style="font-family: var(--font-mono); color: var(--gold);">% [PROVE IT: Medium]</code>
+          under a theorem.
         </p>
-        <!-- TODO(xingyu): replace action with your Formspree form id, e.g.:
-             action="https://formspree.io/f/YOUR_FORM_ID" method="POST" -->
-        <form class="waitlist-form"
-              action="https://formspree.io/f/YOUR_FORM_ID"
-              method="POST">
-          <input type="email" name="email" placeholder="you@university.edu" required autocomplete="email" />
-          <button type="submit" class="btn btn-primary">Notify me →</button>
-        </form>
-        <p class="form-note">No spam · unsubscribe any time</p>
+        <pre class="install-command"><span class="muted">$</span> git clone https://github.com/dangxingyu/fermat.git
+<span class="muted">$</span> cd fermat
+<span class="muted">$</span> npm install
+<span class="muted">$</span> npm run dev</pre>
+        <div class="install-actions">
+          <a class="btn btn-primary" href="https://github.com/dangxingyu/fermat">Open GitHub →</a>
+          <a class="btn btn-ghost" href="https://github.com/dangxingyu/fermat/releases">View releases</a>
+        </div>
+        <p class="form-note">Optional: install Lean 4 + Mathlib cache for formal verification.</p>
       </div>
     </div>
   </section>
@@ -1194,7 +1194,7 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
         <a href="https://github.com/dangxingyu/fermat">GitHub</a>
         <a href="https://github.com/dangxingyu/fermat/releases">Releases</a>
         <a href="https://github.com/dangxingyu/fermat/issues">Issues</a>
-        <a href="#waitlist">Waitlist</a>
+        <a href="#getting-started">Get started</a>
       </div>
     </div>
     <div class="footer-copy">
