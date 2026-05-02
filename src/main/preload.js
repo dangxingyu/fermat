@@ -98,6 +98,8 @@ contextBridge.exposeInMainWorld('api', {
   // Outline
   outline: {
     parse: (content) => ipcRenderer.invoke('outline:parse', content),
+    loadAudit: (data) => ipcRenderer.invoke('outline:load-audit', data),
+    audit: (data) => ipcRenderer.invoke('outline:audit', data),
   },
 
   // Persistent settings — hydrate the Settings modal on mount so the user's

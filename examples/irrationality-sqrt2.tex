@@ -15,7 +15,7 @@
 \maketitle
 
 % ── Open this file in Fermat and click "Submit All" to see the full pipeline.
-% ── The Hard theorem will go through sketch → prove → verify before review.
+% ── High/max-effort proofs go through notebook, prove, verify, and review.
 
 \section{Setup}
 
@@ -29,7 +29,7 @@ $q \neq 0$ such that $x = p/q$.  We say $x$ is \emph{irrational} otherwise.
 \label{lem:parity}
 For any integer $n$, if $n^2$ is even then $n$ is even.
 \end{lemma}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 
 \section{Main Results}
 
@@ -37,7 +37,7 @@ For any integer $n$, if $n^2$ is even then $n$ is even.
 \label{thm:sqrt2}
 $\sqrt{2}$ is irrational.
 \end{theorem}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 % SKETCH: Assume sqrt(2) = p/q in lowest terms. Then 2q^2 = p^2, so p^2 is
 %   even, hence p is even by Lemma~\ref{lem:parity}. Write p = 2k; then
 %   2q^2 = 4k^2, so q^2 = 2k^2, meaning q is also even — contradicting lowest terms.
@@ -46,13 +46,13 @@ $\sqrt{2}$ is irrational.
 \label{thm:sqrt-prime}
 Let $p$ be a prime number.  Then $\sqrt{p}$ is irrational.
 \end{theorem}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \begin{corollary}[Density of irrationals]
 \label{cor:dense}
 Between any two distinct real numbers there exists an irrational number.
 \end{corollary}
-% [PROVE IT: Hard]
+% [PROVE IT: high]
 % SKETCH: Let a < b. WLOG assume a, b >= 0 (the negative case is symmetric).
 %   The interval (a/sqrt(2), b/sqrt(2)) contains a rational r = p/q (by density
 %   of rationals). Then r*sqrt(2) = p*sqrt(2)/q lies in (a, b) and is irrational

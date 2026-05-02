@@ -210,3 +210,197 @@ describe('LeanRepl._buildPathStr', () => {
     expect(r._buildPathStr().length).toBeGreaterThan(0);
   });
 });
+
+// ─── _extractPos: support both object + array pos formats (Bug D) ──────────
+describe('LeanRepl._extractPos', () => {
+  const r = new LeanRepl(WORKSPACE);
+
+  it('handles current object-form pos', () => {
+    expect(r._extractPos({ line: 3, column: 5 })).toEqual({ line: 3, col: 5 });
+  });
+
+  it('handles array-form pos from older REPL builds', () => {
+    // Regression guard: without this, older REPL versions produced pos=0:0
+    // for every diagnostic because msg.pos?.line was undefined on arrays.
+    expect(r._extractPos([7, 2])).toEqual({ line: 7, col: 2 });
+  });
+
+  it('handles null/undefined pos', () => {
+    expect(r._extractPos(null)).toEqual({ line: 0, col: 0 });
+    expect(r._extractPos(undefined)).toEqual({ line: 0, col: 0 });
+  });
+
+  it('handles partially-populated pos object', () => {
+    expect(r._extractPos({ line: 4 })).toEqual({ line: 4, col: 0 });
+    expect(r._extractPos({ column: 2 })).toEqual({ line: 0, col: 2 });
+  });
+});
+
+describe('LeanRepl._responseToResult — pos format compatibility', () => {
+  it('parses array-form pos correctly in messages (Bug D regression)', () => {
+    const r = new LeanRepl(WORKSPACE);
+    const result = r._responseToResult({
+      env: 1,
+      messages: [{ severity: 'error', data: 'oops', pos: [9, 4] }],
+      sorries: [],
+    }, null);
+    expect(result.errors[0].line).toBe(9);
+    expect(result.errors[0].col).toBe(4);
+    expect(result.rawOutput).toContain('theorem.lean:9:4:');
+  });
+
+  it('parses array-form pos in sorries', () => {
+    const r = new LeanRepl(WORKSPACE);
+    const result = r._responseToResult({
+      env: 1,
+      messages: [],
+      sorries: [{ pos: [5, 10], goal: '⊢ Nat' }],
+    }, null);
+    expect(result.rawOutput).toContain('theorem.lean:5:10: information: ');
+    expect(result.rawOutput).toContain('⊢ Nat');
+  });
+});
+
+// ─── Crash cleanup (Bug A) ─────────────────────────────────────────────────
+// When the REPL process dies, every pending command — BOTH the in-flight one
+// AND everything queued behind it — must be rejected. Otherwise queued items
+// stall forever or, worse, are later drained to the restarted process with
+// a stale env ID captured from the previous process.
+
+describe('LeanRepl._onClose — queue cleanup', () => {
+  it('rejects inflight item with "REPL process exited"', async () => {
+    const r = new LeanRepl(WORKSPACE);
+    r._stopped = true; // suppress auto-restart
+
+    let rejectedWith;
+    r._inflight = {
+      cmd: 'test',
+      timer: null,
+      resolve: () => {},
+      reject: err => { rejectedWith = err; },
+    };
+
+    r._onClose(1);
+    expect(rejectedWith).toBeInstanceOf(Error);
+    expect(rejectedWith.message).toMatch(/REPL process exited/);
+    expect(r._inflight).toBeNull();
+  });
+
+  it('rejects every queued item too (not just inflight)', async () => {
+    const r = new LeanRepl(WORKSPACE);
+    r._stopped = true; // suppress auto-restart
+
+    const rejections = [];
+    const mkItem = () => ({
+      cmd: 'x', timer: null,
+      resolve: () => {},
+      reject: err => rejections.push(err),
+    });
+    r._inflight = mkItem();
+    r._queue = [mkItem(), mkItem(), mkItem()];
+
+    r._onClose(1);
+
+    expect(rejections).toHaveLength(4); // 1 inflight + 3 queued
+    rejections.forEach(e => expect(e.message).toMatch(/REPL process exited/));
+    expect(r._queue).toEqual([]);
+    expect(r._inflight).toBeNull();
+  });
+
+  it('clears timers on every rejected item', async () => {
+    const r = new LeanRepl(WORKSPACE);
+    r._stopped = true;
+
+    let cleared = 0;
+    const origClearTimeout = globalThis.clearTimeout;
+    globalThis.clearTimeout = (t) => { if (t) cleared++; origClearTimeout(t); };
+
+    try {
+      const mkItem = () => ({
+        cmd: 'x',
+        timer: setTimeout(() => {}, 60_000),
+        resolve: () => {},
+        reject: () => {},
+      });
+      r._inflight = mkItem();
+      r._queue = [mkItem(), mkItem()];
+
+      r._onClose(1);
+
+      expect(cleared).toBeGreaterThanOrEqual(3);
+    } finally {
+      globalThis.clearTimeout = origClearTimeout;
+    }
+  });
+
+  it('does not auto-restart when _stopped is true', () => {
+    const r = new LeanRepl(WORKSPACE);
+    r._stopped = true;
+    r._ready = true;
+
+    let restartScheduled = false;
+    const origSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, _ms) => { restartScheduled = true; return 0; };
+
+    try {
+      r._onClose(0);
+      expect(restartScheduled).toBe(false);
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+  });
+});
+
+// ─── stop() rejects queued items (extended coverage) ────────────────────────
+describe('LeanRepl.stop — full queue cleanup', () => {
+  it('rejects inflight + queued items before the process teardown', async () => {
+    const r = new LeanRepl(WORKSPACE);
+    const rejections = [];
+    const mkItem = () => ({
+      cmd: 'x', timer: null,
+      resolve: () => {},
+      reject: err => rejections.push(err),
+    });
+    r._inflight = mkItem();
+    r._queue = [mkItem(), mkItem()];
+
+    await r.stop();
+
+    expect(rejections).toHaveLength(3);
+    rejections.forEach(e => expect(e.message).toMatch(/stopped/));
+    expect(r._inflight).toBeNull();
+    expect(r._queue).toEqual([]);
+  });
+});
+
+// ─── start() dedup (Bug B: prevent orphan processes on restart) ─────────────
+// Two concurrent callers of start() must receive the same promise, not two
+// separate `_doStart` invocations. This is what prevents restarts from leaking
+// a second `lake exe repl` child when a verify() races with the restart timer.
+
+describe('LeanRepl.start — dedup', () => {
+  it('returns the same in-flight promise to concurrent callers', () => {
+    const r = new LeanRepl(WORKSPACE);
+    // Fake in-flight start so we don't actually spawn anything
+    const fakePromise = new Promise(() => {}); // never resolves in this test
+    r._startPromise = fakePromise;
+
+    const a = r.start();
+    const b = r.start();
+    expect(a).toBe(fakePromise);
+    expect(b).toBe(fakePromise);
+  });
+
+  it('resolves immediately when already ready without launching _doStart again', async () => {
+    const r = new LeanRepl(WORKSPACE);
+    r._ready = true; // simulate ready state
+    // If start() did anything wrong here, it would spawn or throw. Neither happens:
+    await expect(r.start()).resolves.toBeUndefined();
+  });
+
+  it('rejects start() once stop() has been called', async () => {
+    const r = new LeanRepl(WORKSPACE);
+    await r.stop();
+    await expect(r.start()).rejects.toThrow(/stopped/);
+  });
+});

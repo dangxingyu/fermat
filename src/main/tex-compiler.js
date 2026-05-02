@@ -85,9 +85,9 @@ class TexCompiler {
       out = out.slice(0, docStart) + markerCmd + out.slice(docStart);
     }
 
-    // ── 2. Replace  % [PROVE IT: X]  with  \fermatprove{X} ─────────────
+    // ── 2. Replace  % [PROVE IT: effort]  with  \fermatprove{effort} ──
     //    Preserves SKETCH comments (they stay invisible).
-    // S-04: sanitise the captured difficulty so braces / backslashes in the
+    // S-04: sanitise the captured marker so braces / backslashes in the
     // marker can't break the \fermatprove{} argument or inject LaTeX macros.
     out = out.replace(
       /^(\s*)%\s*\[PROVE\s+IT:\s*([^\]]+)\]\s*$/gm,

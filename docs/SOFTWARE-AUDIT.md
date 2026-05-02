@@ -214,7 +214,7 @@ The marker replacement:
 out = out.replace(/^(\s*)%\s*\[PROVE\s+IT:\s*([^\]]+)\]\s*$/gm, '$1\\fermatprove{$2}');
 ```
 
-The captured group `$2` (`[^\]]+`) allows `{`, `}`, and `\` characters. A marker like `% [PROVE IT: Easy, see {Foo}]` becomes `\fermatprove{Easy, see {Foo}}` which breaks the LaTeX macro argument parsing and causes a compilation error with a confusing error message.
+The captured group `$2` (`[^\]]+`) allows `{`, `}`, and `\` characters. A marker like `% [PROVE IT: low, see {Foo}]` becomes `\fermatprove{low, see {Foo}}` which breaks the LaTeX macro argument parsing and causes a compilation error with a confusing error message.
 
 ---
 

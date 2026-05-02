@@ -1,5 +1,5 @@
 /**
- * Test fermat-prove on Hard difficulty: Fundamental Theorem of Arithmetic
+ * Test fermat-prove at max effort: Fundamental Theorem of Arithmetic
  * This target has dependencies: \ref{lem:division} and \ref{def:prime}
  */
 
@@ -46,7 +46,7 @@ for any $i$, a contradiction.
 For any integers $a$ and $b > 0$, there exist unique integers $q$ and $r$
 such that $a = bq + r$ and $0 \\leq r < b$.
 \\end{lemma}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \\section{Main Results}
 
@@ -56,13 +56,13 @@ Every integer $n > 1$ can be written uniquely as a product of prime numbers,
 up to the order of factors. This relies on Lemma~\\ref{lem:division}
 and the definition of primes (Definition~\\ref{def:prime}).
 \\end{theorem}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 
 \\begin{corollary}
 \\label{cor:sqrt2}
 $\\sqrt{2}$ is irrational. This follows from Theorem~\\ref{thm:fta}.
 \\end{corollary}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \\end{document}`;
 
@@ -80,7 +80,7 @@ async function main() {
   console.log('Target:', target.type, target.name);
   console.log('Labels:', target.labels);
   console.log('Refs:', target.refs);
-  console.log('Difficulty:', target.proveItMarker?.difficulty);
+  console.log('Effort:', target.proveItMarker?.effort);
 
   const assembler = new ContextAssembler();
   const ctx = assembler.assembleForProof(outline, target);
@@ -95,7 +95,7 @@ async function main() {
     path.join(__dirname, '.claude/skills/fermat-prove/SKILL.md'), 'utf-8'
   ).replace(/^---[\s\S]*?---\n*/, '');
 
-  console.log('\n=== Calling Claude API (Hard proof) ===');
+  console.log('\n=== Calling Claude API (max-effort proof) ===');
 
   const Anthropic = require('@anthropic-ai/sdk');
   const client = new Anthropic({
@@ -110,7 +110,7 @@ async function main() {
   });
 
   const proof = response.content[0]?.text || '';
-  console.log('\n=== Generated Proof (FTA, Hard) ===');
+  console.log('\n=== Generated Proof (FTA, max effort) ===');
   console.log(proof);
   console.log('\n=== Usage ===');
   console.log('Input tokens:', response.usage?.input_tokens);
@@ -118,8 +118,8 @@ async function main() {
 
   const outDir = path.join(__dirname, 'test-outputs');
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
-  fs.writeFileSync(path.join(outDir, 'prove-hard-fta.tex'), proof);
-  console.log('Saved to test-outputs/prove-hard-fta.tex');
+  fs.writeFileSync(path.join(outDir, 'prove-max-fta.tex'), proof);
+  console.log('Saved to test-outputs/prove-max-fta.tex');
 }
 
 main().catch(err => { console.error(err); process.exit(1); });

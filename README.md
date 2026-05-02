@@ -4,7 +4,7 @@
 
 [Project homepage](https://dangxingyu.github.io/fermat/) · [GitHub repository](https://github.com/dangxingyu/fermat)
 
-Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, add a `% [PROVE IT: Easy|Medium|Hard]` marker, and let Claude plan, prove, and audit the proof — with optional Lean 4 verification.
+Fermat is an AI-powered LaTeX editor for proving theorems. Write your theorem, add a `% [PROVE IT: low|medium|high|max]` marker, and let Claude plan, prove, and audit the proof — with optional Lean 4 verification.
 
 ---
 
@@ -54,7 +54,7 @@ npm run dev:renderer
 1. Open Fermat (`npm run dev`).
 2. The editor starts with a sample LaTeX document containing three proof markers.
 3. Click **"Submit All"** in the toolbar (or open your own `.tex` file first).
-4. Easy proofs are inserted automatically; Medium/Hard proofs appear in the **Review Panel** on the right for you to accept, edit, or reject.
+4. Low-effort proofs are inserted automatically; medium/high/max proofs appear in the **Review Panel** on the right for you to accept, edit, or reject.
 
 To add a marker to your own document:
 
@@ -63,15 +63,15 @@ To add a marker to your own document:
 \label{thm:inf-primes}
 There are infinitely many prime numbers.
 \end{theorem}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 ```
 
-Supported difficulties: `Easy`, `Medium`, `Hard`.
+Supported proof efforts: `low`, `medium`, `high`, `max`.
 
 You can also include a proof sketch hint:
 
 ```latex
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 % SKETCH: Two parts — existence by induction, uniqueness via Euclid's lemma.
 ```
 
@@ -182,13 +182,13 @@ fermat/
 
 ### Proving pipeline
 
-For each `% [PROVE IT: X]` marker:
+For each `% [PROVE IT: effort]` marker:
 
-1. **Knowledge review** *(Medium/Hard only)* — `fermat-knowledge` audits the document context and optional `.fermat/knowledge.md` ledger.
-2. **Plan** *(Medium/Hard only)* — `fermat-sketch` emits a machine-readable proof plan with fact tiers, use policies, and proof obligations.
-3. **Prove** — `fermat-prove` writes a rigorous `\begin{proof}…\end{proof}` block, proving candidate obligations before using them.
-4. **Verify** — `fermat-verify` checks logic, references, hidden nontrivial facts, and tier/use-policy compliance; if it fails, Fermat retries with the feedback once.
-5. Easy proofs are auto-inlined; Medium/Hard go to the **Review Panel**.
+1. **Low** — `fermat-prove` writes a direct proof; by default these proofs are auto-inlined and verification is skipped.
+2. **medium** — `fermat-knowledge` audits available facts, `fermat-sketch` emits a machine-readable plan, then Fermat proves and verifies with one correction pass.
+3. **High** — Fermat builds a proof notebook, runs independent drafts, verifies them, and tries a repair pass if all drafts fail.
+4. **Max** — Fermat runs the long-range pipeline: staged notebook updates, optional research review, parallel proof attempts, verifier feedback, and persisted `.fermat/proof-runs/` snapshots.
+5. medium/high/max proofs go to the **Review Panel** before insertion.
 
 For source-backed facts, candidate lemmas, failed proof attempts, and likely-false routes, create a project ledger at `.fermat/knowledge.md`. See [`docs/NATURAL-LANGUAGE-PROOF-PIPELINE.md`](docs/NATURAL-LANGUAGE-PROOF-PIPELINE.md) for the schema.
 

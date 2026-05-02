@@ -128,35 +128,35 @@ describe('parseTheoryOutline — theorem environments', () => {
 });
 
 describe('parseTheoryOutline — PROVE IT markers', () => {
-  it('parses [PROVE IT: Easy] marker after a theorem', () => {
+  it('parses [PROVE IT: low] marker after a theorem', () => {
     const tex = [
       '\\begin{document}',
       '\\begin{theorem}\\label{thm:t}',
       '  Claim.',
       '\\end{theorem}',
-      '% [PROVE IT: Easy]',
+      '% [PROVE IT: low]',
       '\\end{document}',
     ].join('\n');
     const out = parseTheoryOutline(tex);
     const thm = out.nodes.find(n => n.type === 'theorem');
     expect(thm.proveItMarker).toBeTruthy();
-    expect(thm.proveItMarker.difficulty).toBe('Easy');
+    expect(thm.proveItMarker.effort).toBe('low');
   });
 
-  it('parses difficulty Medium and Hard', () => {
-    for (const diff of ['Medium', 'Hard']) {
+  it('parses effort medium, high, and max', () => {
+    for (const effort of ['medium', 'high', 'max']) {
       const tex = [
         '\\begin{document}',
         '\\begin{lemma}',
         '  Claim.',
         '\\end{lemma}',
-        `% [PROVE IT: ${diff}]`,
+        `% [PROVE IT: ${effort}]`,
         '\\end{document}',
       ].join('\n');
       const out = parseTheoryOutline(tex);
       const lemma = out.nodes.find(n => n.type === 'lemma');
       expect(lemma).toBeTruthy();
-      expect(lemma.proveItMarker?.difficulty).toBe(diff);
+      expect(lemma.proveItMarker?.effort).toBe(effort);
     }
   });
 
@@ -166,13 +166,28 @@ describe('parseTheoryOutline — PROVE IT markers', () => {
       '\\begin{theorem}',
       '  T.',
       '\\end{theorem}',
-      '% [PROVE IT: Hard, model=opus]',
+      '% [PROVE IT: max, model=opus]',
       '\\end{document}',
     ].join('\n');
     const out = parseTheoryOutline(tex);
     const thm = out.nodes[0];
-    expect(thm.proveItMarker?.difficulty).toBe('Hard');
+    expect(thm.proveItMarker?.effort).toBe('max');
     expect(thm.proveItMarker?.preferredModel).toBe('opus');
+  });
+
+  it('ignores unsupported marker names', () => {
+    for (const removed of ['quick', 'deep', 'extreme']) {
+      const out = parseTheoryOutline([
+        '\\begin{document}',
+        '\\begin{lemma}',
+        '  Claim.',
+        '\\end{lemma}',
+        `% [PROVE IT: ${removed}]`,
+        '\\end{document}',
+      ].join('\n'));
+      const lemma = out.nodes.find(n => n.type === 'lemma');
+      expect(lemma.proveItMarker).toBeNull();
+    }
   });
 });
 

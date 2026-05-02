@@ -30,10 +30,11 @@ export const latexLanguage = {
 
   tokenizer: {
     root: [
-      // [PROVE IT: X] markers — special highlighting
-      [/\[PROVE\s+IT:\s*Easy[^\]]*\]/, 'prove-it-easy'],
-      [/\[PROVE\s+IT:\s*Medium[^\]]*\]/, 'prove-it-medium'],
-      [/\[PROVE\s+IT:\s*Hard[^\]]*\]/, 'prove-it-hard'],
+      // [PROVE IT: effort] markers — special highlighting
+      [/\[PROVE\s+IT:\s*low[^\]]*\]/i, 'prove-it-low'],
+      [/\[PROVE\s+IT:\s*medium[^\]]*\]/i, 'prove-it-medium'],
+      [/\[PROVE\s+IT:\s*high[^\]]*\]/i, 'prove-it-high'],
+      [/\[PROVE\s+IT:\s*max[^\]]*\]/i, 'prove-it-max'],
 
       // Comments
       [/%.*$/, 'comment'],
@@ -108,9 +109,10 @@ export const latexTheme = {
     { token: 'number', foreground: 'fab387' },
 
     // PROVE IT markers
-    { token: 'prove-it-easy', foreground: 'a6e3a1', fontStyle: 'bold' },
+    { token: 'prove-it-low', foreground: 'a6e3a1', fontStyle: 'bold' },
     { token: 'prove-it-medium', foreground: 'f9e2af', fontStyle: 'bold' },
-    { token: 'prove-it-hard', foreground: 'f38ba8', fontStyle: 'bold' },
+    { token: 'prove-it-high', foreground: 'd4a574', fontStyle: 'bold' },
+    { token: 'prove-it-max', foreground: 'f38ba8', fontStyle: 'bold' },
   ],
   colors: {
     'editor.background': '#1e1e2e',

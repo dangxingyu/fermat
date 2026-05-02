@@ -201,21 +201,36 @@ class LeanRepl {
    */
   _send(cmd, envId, signal, timeoutMs) {
     return new Promise((resolve, reject) => {
-      const timer = (timeoutMs ?? this._timeoutMs) > 0
+      const to = timeoutMs ?? this._timeoutMs;
+
+      // Declare `item` first (as `let`) so the timer callback's closure binds
+      // to the same variable we later assign. The callback is async — by the
+      // time it fires, `item` is initialized — but declaring upfront avoids
+      // any TDZ ambiguity from readers of this code.
+      let item;
+
+      const timer = to > 0
         ? setTimeout(() => {
-            console.warn(`[LeanRepl] Command timed out after ${timeoutMs ?? this._timeoutMs}ms — killing process`);
+            console.warn(`[LeanRepl] Command timed out after ${to}ms — killing process`);
+            // Remove from queue if still waiting (not yet sent) — otherwise
+            // _drainQueue would later try to send an already-rejected item.
+            if (item) {
+              const idx = this._queue.indexOf(item);
+              if (idx >= 0) this._queue.splice(idx, 1);
+              if (this._inflight === item) this._inflight = null;
+            }
             try { this._proc?.kill('SIGTERM'); } catch {}
             setTimeout(() => { try { this._proc?.kill('SIGKILL'); } catch {} }, 1500);
-            const err = new Error(`lean REPL timed out after ${timeoutMs ?? this._timeoutMs}ms`);
+            const err = new Error(`lean REPL timed out after ${to}ms`);
             err.timedOut = true;
-            item.reject(err);
-          }, timeoutMs ?? this._timeoutMs)
+            reject(err);
+          }, to)
         : null;
 
-      const item = {
+      item = {
         cmd, envId,
-        resolve: resp  => { if (timer) clearTimeout(timer); resolve(resp); },
-        reject:  err   => { if (timer) clearTimeout(timer); reject(err); },
+        resolve: resp => { if (timer) clearTimeout(timer); resolve(resp); },
+        reject:  err  => { if (timer) clearTimeout(timer); reject(err); },
         timer,
       };
 
@@ -298,10 +313,20 @@ class LeanRepl {
     this._proc = null;
     this._buf = '';
 
+    // Bug A fix: reject BOTH inflight AND queued items. Queued items captured
+    // the old _baseEnv, so even after restart they can't safely resume — they
+    // would send "env: <old_id>" to a fresh process with a different env map.
+    const exitErr = new Error(`REPL process exited (code ${code})`);
     if (this._inflight) {
-      this._inflight.reject(new Error(`REPL process exited (code ${code})`));
+      if (this._inflight.timer) clearTimeout(this._inflight.timer);
+      this._inflight.reject(exitErr);
       this._inflight = null;
     }
+    for (const item of this._queue) {
+      if (item.timer) clearTimeout(item.timer);
+      item.reject(exitErr);
+    }
+    this._queue = [];
 
     if (this._stopped) return;
 
@@ -309,8 +334,12 @@ class LeanRepl {
       const delay = RESTART_BACKOFF_MS[this._restartCount] ?? 30_000;
       this._restartCount++;
       console.warn(`[LeanRepl] Crashed (code ${code}), restart ${this._restartCount}/${MAX_RESTARTS} in ${delay}ms`);
+      // Bug B fix: go through start() so the _startPromise dedup kicks in —
+      // otherwise a concurrent verify() → start() call would launch a SECOND
+      // _doStart and we'd end up with two `lake exe repl` processes racing.
       setTimeout(() => {
-        this._doStart().catch(err => console.error('[LeanRepl] Restart failed:', err.message));
+        if (this._stopped) return;
+        this.start().catch(err => console.error('[LeanRepl] Restart failed:', err.message));
       }, delay);
     } else {
       console.error(`[LeanRepl] Exited (code ${code}); max restarts reached or not yet ready`);
@@ -341,8 +370,7 @@ class LeanRepl {
 
     for (const msg of (response.messages ?? [])) {
       const severity = msg.severity === 'information' ? 'info' : (msg.severity ?? 'error');
-      const line = msg.pos?.line ?? 0;
-      const col  = msg.pos?.column ?? 0;
+      const { line, col } = this._extractPos(msg.pos);
       const text = msg.data ?? '';
       errors.push({ file: 'theorem.lean', line, col, severity, message: text });
       // Use 'information' (not 'info') in rawOutput — _parseGoalStates scans for it
@@ -353,8 +381,7 @@ class LeanRepl {
     // Emit sorry goal states as 'information:' lines so _parseGoalStates can
     // read elaborated ⊢ types without needing a separate trace_state probe.
     for (const sorry of (response.sorries ?? [])) {
-      const line = sorry.pos?.line ?? 0;
-      const col  = sorry.pos?.column ?? 0;
+      const { line, col } = this._extractPos(sorry.pos);
       rawLines.push(`theorem.lean:${line}:${col}: information: `);
       if (sorry.goal) rawLines.push(...sorry.goal.split('\n'));
     }
@@ -372,6 +399,25 @@ class LeanRepl {
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  /**
+   * Extract {line, col} from a REPL message's `pos` field.
+   *
+   * leanprover-community/repl has used two output formats across versions:
+   *   - Object form:  { "line": 3, "column": 5 }   (current)
+   *   - Array form:   [3, 5]                       (earlier versions)
+   *
+   * Supporting both keeps error positions correct regardless of which REPL
+   * build the user has installed. Without this, an array-form response would
+   * parse to 0:0 for every diagnostic — a silent UX regression.
+   */
+  _extractPos(pos) {
+    if (!pos) return { line: 0, col: 0 };
+    if (Array.isArray(pos)) {
+      return { line: pos[0] ?? 0, col: pos[1] ?? 0 };
+    }
+    return { line: pos.line ?? 0, col: pos.column ?? 0 };
+  }
 
   /**
    * Strip import lines from the source — the REPL's base env already has them

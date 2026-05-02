@@ -7,6 +7,7 @@ const { TexCompiler } = require('./tex-compiler');
 const { SynctexBridge } = require('./synctex-bridge');
 const { LeanRunner } = require('./lean-runner');
 const { CompletionBackend } = require('./completion-backend');
+const { loadOutlineAudit } = require('./outline-audit');
 
 // ─── Persistent settings store ────────────────────────────────────────────
 // Wires into the `copilot:configure`, `tex:set-engine`, and `settings:load` IPC
@@ -18,9 +19,12 @@ const settingsStore = new Store({
       defaultModel: 'claude',
       models: { claude: { apiKey: '', model: 'claude-sonnet-4-6' } },
       maxConcurrent: 3,
-      autoInlineDifficulty: ['Easy'],
+      autoInlineEffort: ['low'],
+      skipVerifyEffort: ['low'],
+      maxProofWidth: 3,
+      maxProofStages: 3,
       verificationMode: 'off',
-      lean: { binaryPath: '', maxRetries: 3, usesMathlib: false, useRepl: false },
+      lean: { binaryPath: '', maxRetries: 3, usesMathlib: true, useRepl: true },
     },
     texEngine: 'tectonic',
   },
@@ -632,6 +636,36 @@ ipcMain.handle('settings:load', async () => {
 ipcMain.handle('outline:parse', async (_event, content) => {
   const { parseTheoryOutline } = require('./outline-parser');
   return parseTheoryOutline(content);
+});
+
+ipcMain.handle('outline:load-audit', async (_event, { filePath, content, outline } = {}) => {
+  if (!filePath) return null;
+  const { parseTheoryOutline } = require('./outline-parser');
+  const resolvedOutline = outline || (content ? parseTheoryOutline(content) : null);
+  return loadOutlineAudit({
+    filePath,
+    texContent: content || '',
+    outline: resolvedOutline,
+  });
+});
+
+ipcMain.handle('outline:audit', async (_event, { content, filePath, outline, force } = {}) => {
+  ensureEngines();
+  if (!content) {
+    throw new Error('outline:audit requires document content');
+  }
+
+  const config = settingsStore.get('copilot') || {};
+  const modelKey = config.defaultModel || 'claude';
+  const modelConfig = config.models?.[modelKey] || config.models?.claude || {};
+
+  return copilotEngine.auditOutline(content, {
+    filePath,
+    outline,
+    force: !!force,
+    apiKey: modelConfig.apiKey,
+    model: modelConfig.model || config.models?.claude?.model || 'claude-sonnet-4-6',
+  });
 });
 
 // ─── Auto-updater IPC ──────────────────────────────────────────────

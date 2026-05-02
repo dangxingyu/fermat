@@ -36,11 +36,11 @@ Every integer $n > 1$ can be written uniquely as a product of prime numbers,
 up to the order of factors. This relies on Lemma~\\ref{lem:division}
 and the definition of primes (Definition~\\ref{def:prime}).
 \\end{theorem}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 \\end{document}`;
 
 const GOOD_PROOF = fs.readFileSync(
-  path.join(__dirname, 'test-outputs/prove-hard-fta.tex'), 'utf-8'
+  path.join(__dirname, 'test-outputs/prove-max-fta.tex'), 'utf-8'
 );
 
 const BAD_PROOF = `\\begin{proof}

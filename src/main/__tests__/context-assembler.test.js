@@ -29,7 +29,7 @@ describe('ContextAssembler — assembleForProof', () => {
       '\\label{thm:main}',
       '  Claim.',
       '\\end{theorem}',
-      '% [PROVE IT: Medium]',
+      '% [PROVE IT: medium]',
       '\\end{document}',
     ].join('\n');
     const { outline, target } = buildOutline(tex, 'thm:main');
@@ -40,7 +40,7 @@ describe('ContextAssembler — assembleForProof', () => {
     expect(ctx.preamble).toContain('\\documentclass{article}');
     expect(ctx.target.labels).toContain('thm:main');
     expect(ctx.target.statementTeX).toContain('\\begin{theorem}');
-    expect(ctx.target.difficulty).toBe('Medium');
+    expect(ctx.target.effort).toBe('medium');
     expect(ctx.fullText).toContain('\\begin{document}');
   });
 
@@ -59,7 +59,7 @@ describe('ContextAssembler — assembleForProof', () => {
       '\\label{thm:main}',
       '  By \\ref{lem:a} and \\ref{lem:b}, result.',
       '\\end{theorem}',
-      '% [PROVE IT: Medium]',
+      '% [PROVE IT: medium]',
       '\\end{document}',
     ].join('\n');
     const { outline, target } = buildOutline(tex, 'thm:main');
@@ -77,7 +77,7 @@ describe('ContextAssembler — assembleForProof', () => {
       '\\label{thm:trivial}',
       '  Standalone statement.',
       '\\end{theorem}',
-      '% [PROVE IT: Easy]',
+      '% [PROVE IT: low]',
       '\\end{document}',
     ].join('\n');
     const { outline, target } = buildOutline(tex, 'thm:trivial');
@@ -88,7 +88,7 @@ describe('ContextAssembler — assembleForProof', () => {
     expect(ctx.transitiveDependencies).toEqual([]);
   });
 
-  it('defaults target.difficulty to "Medium" when no marker is present', () => {
+  it('defaults target effort to "medium" when no marker is present', () => {
     const tex = [
       '\\begin{document}',
       '\\begin{theorem}',
@@ -101,7 +101,7 @@ describe('ContextAssembler — assembleForProof', () => {
     expect(target).toBeTruthy();
     const ca = new ContextAssembler();
     const ctx = ca.assembleForProof(outline, target);
-    expect(ctx.target.difficulty).toBe('Medium');
+    expect(ctx.target.effort).toBe('medium');
   });
 });
 
@@ -113,7 +113,7 @@ describe('ContextAssembler — formatAsPrompt', () => {
       '\\label{thm:x}',
       '  Claim.',
       '\\end{theorem}',
-      '% [PROVE IT: Hard]',
+      '% [PROVE IT: max]',
       '\\end{document}',
     ].join('\n');
     const { outline, target } = buildOutline(tex, 'thm:x');
@@ -121,7 +121,7 @@ describe('ContextAssembler — formatAsPrompt', () => {
     const ca = new ContextAssembler();
     const prompt = ca.formatAsPrompt(ca.assembleForProof(outline, target));
     expect(prompt).toMatch(/<theory_map>[\s\S]*<\/theory_map>/);
-    expect(prompt).toMatch(/<target difficulty="Hard">/);
+    expect(prompt).toMatch(/<target effort="max">/);
     expect(prompt).toMatch(/<full_document>[\s\S]*<\/full_document>/);
   });
 
@@ -150,7 +150,7 @@ describe('ContextAssembler — formatAsPrompt', () => {
       '\\label{thm:x}',
       '  Claim.',
       '\\end{theorem}',
-      '% [PROVE IT: Medium]',
+      '% [PROVE IT: medium]',
       '\\end{document}',
     ].join('\n');
     const { outline, target } = buildOutline(tex, 'thm:x');
@@ -182,7 +182,7 @@ describe('ContextAssembler — proof memory (recordAcceptedProof)', () => {
       '\\label{thm:main}',
       '  By \\ref{lem:helper}, done.',
       '\\end{theorem}',
-      '% [PROVE IT: Easy]',
+      '% [PROVE IT: low]',
       '\\end{document}',
     ].join('\n');
     const { outline, target } = buildOutline(tex, 'thm:main');

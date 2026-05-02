@@ -9,7 +9,7 @@ const THEOREM_ENVS = [
   'assumption', 'axiom', 'observation', 'fact',
 ];
 
-const PROVE_IT_REGEX = /\[PROVE\s+IT:\s*(Easy|Medium|Hard)(?:\s*,\s*model\s*=\s*(\w+))?\]/gi;
+const PROVE_IT_REGEX = /\[PROVE\s+IT:\s*(low|medium|high|max)(?:\s*,\s*model\s*=\s*([\w.-]+))?\]/gi;
 const LABEL_REGEX = /\\label\{([^}]+)\}/g;
 const REF_REGEX = /\\(?:ref|eqref|cref|Cref|autoref)\{([^}]+)\}/g;
 const BEGIN_ENV_REGEX = /\\begin\{(\w+)\}(?:\[([^\]]*)\])?/;
@@ -17,6 +17,20 @@ const END_ENV_REGEX = /\\end\{(\w+)\}/;
 const PROOF_BEGIN = /\\begin\{proof\}/;
 const PROOF_END = /\\end\{proof\}/;
 const SECTION_REGEX = /\\(section|subsection|subsubsection|chapter|part)\*?\{([^}]+)\}/;
+
+function normalizeProveEffort(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'max'].includes(key) ? key : 'medium';
+}
+
+function makeProveItMarker(match, extra = {}) {
+  const effort = normalizeProveEffort(match[1]);
+  return {
+    effort,
+    preferredModel: match[2] || null,
+    ...extra,
+  };
+}
 
 export function parseTheoryOutlineBrowser(texContent) {
   const lines = texContent.split('\n');
@@ -88,11 +102,7 @@ export function parseTheoryOutlineBrowser(texContent) {
         }
         REF_REGEX.lastIndex = 0;
         while ((m = PROVE_IT_REGEX.exec(body)) !== null) {
-          currentNode.proveItMarker = {
-            difficulty: m[1],
-            preferredModel: m[2] || null,
-            offset: m.index,
-          };
+          currentNode.proveItMarker = makeProveItMarker(m, { offset: m.index });
         }
         PROVE_IT_REGEX.lastIndex = 0;
         delete currentNode.bodyLines;
@@ -125,11 +135,7 @@ export function parseTheoryOutlineBrowser(texContent) {
       while ((m = PROVE_IT_REGEX.exec(line)) !== null) {
         const lastNode = [...nodes].reverse().find(n => THEOREM_ENVS.includes(n.type));
         if (lastNode && !lastNode.proveItMarker) {
-          lastNode.proveItMarker = {
-            difficulty: m[1],
-            preferredModel: m[2] || null,
-            lineNumber: lineNum,
-          };
+          lastNode.proveItMarker = makeProveItMarker(m, { lineNumber: lineNum });
         }
       }
       PROVE_IT_REGEX.lastIndex = 0;

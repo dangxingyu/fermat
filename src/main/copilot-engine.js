@@ -6,22 +6,27 @@ const { LeanRunner } = require('./lean-runner');
 /**
  * FermatEngine
  *
- * Manages async proof requests. Detects [PROVE IT: Easy|Medium|Hard] markers,
+ * Manages async proof requests. Detects [PROVE IT: low|medium|high|max] markers,
  * dispatches proving to ClaudeCodeBackend, and streams results back.
  *
  * Architecture:
  *   - Each marker becomes a ProofTask in a queue
  *   - Tasks run concurrently up to a configurable limit
- *   - Easy proofs auto-inline; Medium/Hard go to review panel
+ *   - low proofs can auto-inline; medium/high/max go to review panel
  *   - ClaudeCodeBackend handles context assembly + skill-based proving
  *   - Falls back to direct API calls if Claude Code CLI not available
  *
- * Proving pipeline (for Medium/Hard):
- *   1. Sketch  — plan the proof strategy, identify prerequisites
- *   2. Prove   — write the full proof using the assembled context
- *   3. Verify  — LLM-as-judge checks correctness
- *   4. Retry   — if verification fails, attempt self-correction (once)
+ * Proving pipeline scales with effort:
+ *   low    — direct proof
+ *   medium — knowledge/plan/prove/verify
+ *   high   — notebook + parallel drafts + verifier repair
+ *   max    — staged long-range notebook/search loop
  */
+
+function normalizeProofEffort(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'max'].includes(key) ? key : 'medium';
+}
 
 class ProofTask {
   constructor(marker, model) {
@@ -46,8 +51,10 @@ class FermatEngine extends EventEmitter {
         claude: { apiKey: '', model: 'claude-sonnet-4-6' },
       },
       maxConcurrent: 3,
-      autoInlineDifficulty: ['Easy'],
-      skipVerifyDifficulty: ['Easy'],  // Skip verification for easy proofs
+      autoInlineEffort: ['low'],
+      skipVerifyEffort: ['low'],
+      maxProofWidth: 3,
+      maxProofStages: 3,
       verificationMode: 'off',         // 'off' | 'lean'
       lean: { binaryPath: '', maxRetries: 3 },
     };
@@ -70,6 +77,8 @@ class FermatEngine extends EventEmitter {
 
   configure(config) {
     Object.assign(this.config, config);
+    this.config.autoInlineEffort = [...new Set(this.config.autoInlineEffort.map(normalizeProofEffort))];
+    this.config.skipVerifyEffort = [...new Set(this.config.skipVerifyEffort.map(normalizeProofEffort))];
     // B-11 defence-in-depth: never let NaN or non-finite numerics reach the
     // queue scheduler (while-loop `running < NaN` is always false, which
     // silently disables all proofs).
@@ -80,6 +89,12 @@ class FermatEngine extends EventEmitter {
     if (this.config.lean && !Number.isFinite(this.config.lean.maxRetries)) {
       this.config.lean.maxRetries = 3;
     }
+    if (!Number.isFinite(this.config.maxProofWidth) || this.config.maxProofWidth < 2) {
+      this.config.maxProofWidth = 3;
+    }
+    if (!Number.isFinite(this.config.maxProofStages) || this.config.maxProofStages < 1) {
+      this.config.maxProofStages = 3;
+    }
     // Propagate mathlib flag to the runner whenever it changes.
     // Binary detection (detect()) is NOT triggered here — that is main.js's
     // responsibility so it can deduplicate across startup and user-initiated
@@ -89,7 +104,7 @@ class FermatEngine extends EventEmitter {
       this.leanRunner.setUsesMathlib(this.config.lean?.usesMathlib ?? false);
     }
     const model = this.config.models?.claude?.model || this.config.defaultModel || '(default)';
-    console.log(`[Copilot] Configured: model=${model} | maxConcurrent=${this.config.maxConcurrent} | verifyMode=${this.config.verificationMode ?? 'off'} | lean.mathlib=${!!this.config.lean?.usesMathlib} | lean.repl=${!!this.config.lean?.useRepl}`);
+    console.log(`[Copilot] Configured: model=${model} | maxConcurrent=${this.config.maxConcurrent} | autoInlineEffort=${this.config.autoInlineEffort.join(',')} | maxPipeline=${this.config.maxProofWidth}x${this.config.maxProofStages} | verifyMode=${this.config.verificationMode ?? 'off'} | lean.mathlib=${!!this.config.lean?.usesMathlib} | lean.repl=${!!this.config.lean?.useRepl}`);
   }
 
   /**
@@ -101,9 +116,13 @@ class FermatEngine extends EventEmitter {
   }
 
   /**
-   * Submit a proof request from a [PROVE IT: X] marker
+   * Submit a proof request from a [PROVE IT: effort] marker.
    */
   submitProofRequest(marker) {
+    marker = {
+      ...marker,
+      effort: normalizeProofEffort(marker?.effort),
+    };
     const model = marker.preferredModel || this.config.defaultModel;
     const task = new ProofTask(marker, model);
     this.tasks.set(task.id, task);
@@ -135,7 +154,7 @@ class FermatEngine extends EventEmitter {
     for (const [id, task] of this.tasks) {
       statuses[id] = {
         id,
-        difficulty: task.marker.difficulty,
+        effort: normalizeProofEffort(task.marker.effort),
         label: task.marker.label,
         model: task.model,
         status: task.status,
@@ -192,6 +211,24 @@ class FermatEngine extends EventEmitter {
     this.backend.recordAcceptedProof(label, statementTeX, proofTeX);
   }
 
+  auditOutline(content, options = {}) {
+    return this.backend.auditOutline(content, options);
+  }
+
+  _shouldAutoInline(effort, marker) {
+    const configured = Array.isArray(this.config.autoInlineEffort)
+      ? this.config.autoInlineEffort
+      : ['low'];
+    return configured.map(normalizeProofEffort).includes(normalizeProofEffort(effort || marker?.effort));
+  }
+
+  _shouldSkipVerify(effort, marker) {
+    const configured = Array.isArray(this.config.skipVerifyEffort)
+      ? this.config.skipVerifyEffort
+      : ['low'];
+    return configured.map(normalizeProofEffort).includes(normalizeProofEffort(effort || marker?.effort));
+  }
+
   async _processQueue() {
     while (this.queue.length > 0 && this.running < this.config.maxConcurrent) {
       const task = this.queue.shift();
@@ -214,7 +251,7 @@ class FermatEngine extends EventEmitter {
         throw new Error('No document content available. Compile first.');
       }
 
-      const difficulty = task.marker.difficulty || 'Medium';
+      const effort = normalizeProofEffort(task.marker.effort);
       const modelConfig = this.config.models[task.model] || this.config.models.claude;
 
       // Update task status as we progress through the pipeline
@@ -232,7 +269,7 @@ class FermatEngine extends EventEmitter {
         });
       };
 
-      updateStatus(difficulty === 'Easy' ? 'proving' : 'sketching');
+      updateStatus(effort === 'low' ? 'proving' : 'sketching');
 
       // QA P1-03: when the user has opted into lean verification but the
       // binary isn't available, surface a dedicated status so the renderer
@@ -267,12 +304,14 @@ class FermatEngine extends EventEmitter {
       const result = await this.backend.prove(content, task.marker, {
         apiKey: modelConfig.apiKey,
         model: modelConfig.model,
-        skipVerify: this.config.skipVerifyDifficulty.includes(difficulty),
+        skipVerify: this._shouldSkipVerify(effort, task.marker),
         onStream,
         onStatus,
         verificationMode: this.config.verificationMode,
         leanRunner: this.leanRunner,
         maxLeanRetries: this.config.lean?.maxRetries ?? 3,
+        maxProofWidth: this.config.maxProofWidth ?? 3,
+        maxProofStages: this.config.maxProofStages ?? 3,
         onStatementReview,
         taskId: task.id,
         signal: task.abortController.signal, // B-03: forward cancel into backend
@@ -282,7 +321,7 @@ class FermatEngine extends EventEmitter {
       task.completedAt = Date.now();
       task.result = result;
 
-      const autoInline = this.config.autoInlineDifficulty.includes(difficulty);
+      const autoInline = this._shouldAutoInline(effort, task.marker);
 
       // QA P1-03: only include lean fields when lean ACTUALLY ran. The
       // renderer's App.jsx guard is `data.leanCode !== undefined` — using
@@ -294,7 +333,12 @@ class FermatEngine extends EventEmitter {
         taskId: task.id,
         marker: task.marker,
         proof: result.proof,
+        knowledge: result.knowledge || null,
         sketch: result.sketch || null,
+        research: result.research || null,
+        proofNotebook: result.proofNotebook || null,
+        proofPipeline: result.proofPipeline || null,
+        maxPipeline: result.maxPipeline || null,
         verdict: result.verdict || null,
         autoInline,
         ...(result.leanCode !== undefined ? {

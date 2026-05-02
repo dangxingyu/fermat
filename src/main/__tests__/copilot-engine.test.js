@@ -52,11 +52,11 @@ function makeEngine() {
   return engine;
 }
 
-function mockMarker(label = 'thm:x', difficulty = 'Medium') {
+function mockMarker(label = 'thm:x', effort = 'medium') {
   return {
     id: `marker_${label}`,
     label,
-    difficulty,
+    effort,
     lineNumber: 10,
     fullContent: 'some document content',
   };
@@ -188,5 +188,36 @@ describe('FermatEngine — concurrency limit', () => {
     expect(engine.queue.length).toBe(0);
     // Two prove calls total now — one for 'a' (resolved) and one for 'b' (pending).
     expect(engine.backend.calls.length).toBe(2);
+  });
+});
+
+describe('FermatEngine — completed proof payload', () => {
+  it('includes max pipeline notebook metadata for renderer review', async () => {
+    const engine = makeEngine();
+    engine.configure({ models: { claude: { apiKey: 'k', model: 'm' } } });
+    engine.updateContent('doc');
+
+    const completed = new Promise((resolve) => {
+      engine.on('proof:completed', resolve);
+    });
+
+    engine.submitProofRequest(mockMarker('max-target', 'max'));
+    for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
+
+    engine.backend.resolveLast({
+      proof: '\\begin{proof}QED.\\end{proof}',
+      proofNotebook: '<proof_notebook><status>ready</status></proof_notebook>',
+      proofNotebook: '<proof_notebook><status>ready</status></proof_notebook>',
+      proofPipeline: { mode: 'max-long-range', attempts: [{ role: 'primary', verdictTag: 'PASS' }] },
+      verdict: '<verdict>PASS</verdict>',
+    });
+
+    const data = await completed;
+    expect(data.proofNotebook).toContain('<proof_notebook>');
+    expect(data.proofNotebook).toContain('<proof_notebook>');
+    expect(data.proofPipeline).toMatchObject({
+      mode: 'max-long-range',
+      attempts: [{ role: 'primary', verdictTag: 'PASS' }],
+    });
   });
 });

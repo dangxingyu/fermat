@@ -3,7 +3,7 @@ name: fermat-sketch
 description: >
   Build a proof plan before writing the proof. Produces a structured plan with
   available facts, proof obligations, confidence tiers, allowed-use policies,
-  and a step-by-step route. Use before fermat-prove on Medium or Hard targets.
+  and a step-by-step route. Use before fermat-prove on medium/high/max effort targets.
 ---
 
 # Fermat Plan
@@ -69,7 +69,7 @@ Output exactly one `<proof_plan>` block. Keep it machine-readable and concrete.
   <target_analysis>
     <claim_type>existence | uniqueness | equivalence | implication | inequality | identity | structural | other</claim_type>
     <plain_language>...</plain_language>
-    <main_difficulty>...</main_difficulty>
+    <main_obstacle>...</main_obstacle>
   </target_analysis>
 
   <available_facts>

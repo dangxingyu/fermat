@@ -3,21 +3,22 @@
  *
  * Manages the local Lean 4 verification environment for Fermat.
  *
- * Three verification modes:
+ * Verification flow (preference order):
  *
- *   1. REPL mode (useRepl: true + usesMathlib: true + mathlibReady)
- *      Uses a persistent `lake exe repl` process (LeanRepl).  Mathlib is
- *      loaded once at startup; subsequent verifications reuse the warm process.
- *      Eliminates the ~30 s mathlib cold-start cost per verification.
+ *   1. REPL mode — `useRepl: true` AND repl package is built in the workspace.
+ *      A persistent `lake exe repl` process stays alive; Mathlib is loaded
+ *      once at startup (~30 s), then each subsequent verify is 1–3 s.
  *
- *   2. Core-only (default)
- *      Writes a temp .lean file to /tmp, runs `lean <file>` directly.
- *      Fast (~1-3 s), no lake project required, supports Lean core + Std.
+ *   2. Lake env mode (default when lake is installed).
+ *      `lake env lean <file>` inside lean-workspace/. Lake sets up LEAN_PATH
+ *      so `import Mathlib`, `import Std`, or any declared dependency resolves.
+ *      This is the single path for both "Mathlib" and "no-Mathlib" code; the
+ *      `_usesMathlib` flag ONLY controls what the LLM generates (see
+ *      `effectiveMathlib` getter), never which command we run.
  *
- *   3. Mathlib binary mode (usesMathlib: true, useRepl: false)
- *      Writes the temp file into lean-workspace/ (the lake project that has
- *      mathlib as a dependency), runs `lake env lean <file>`.  Requires lake
- *      exe cache get to have been run first.
+ *   3. Core-only fallback — used only when lake is not installed. Runs
+ *      `lean <file>` from /tmp with no workspace context. Supports Lean core
+ *      + Std proofs; `import Mathlib` will fail with "unknown module prefix".
  *
  * Error parsing:
  *   Lean error format:  /path/file.lean:LINE:COL: error: MESSAGE
@@ -55,11 +56,40 @@ function parseLeanErrorLine(line) {
 const DEFAULT_LEAN_TIMEOUT_MS = 120_000;
 
 // Absolute path to the lean-workspace lake project (relative to Fermat repo root).
-// In packaged builds this resolves to resourcesPath/lean-workspace.
+// In packaged builds, seed a writable copy from resourcesPath into userData.
+// Lake writes .lake/packages and .lake/build artifacts during setup, and app
+// resources are read-only on some platforms.
+function syncPackagedWorkspace(bundledPath, userWorkspacePath) {
+  if (!fs.existsSync(bundledPath)) return false;
+
+  fs.mkdirSync(userWorkspacePath, { recursive: true });
+  fs.cpSync(bundledPath, userWorkspacePath, {
+    recursive: true,
+    force: true,
+    filter: (src) => !path.relative(bundledPath, src).split(path.sep).includes('.lake'),
+  });
+  return true;
+}
+
+function hasWorkspaceSeed(workspacePath) {
+  return fs.existsSync(path.join(workspacePath, 'lakefile.toml'))
+    && fs.existsSync(path.join(workspacePath, 'lean-toolchain'));
+}
+
 function resolveWorkspacePath() {
   const { app } = (() => { try { return require('electron'); } catch { return {}; } })();
   if (app?.isPackaged) {
-    return path.join(process.resourcesPath, 'lean-workspace');
+    const bundledPath = path.join(process.resourcesPath, 'lean-workspace');
+    let userWorkspacePath = bundledPath;
+    try {
+      userWorkspacePath = path.join(app.getPath('userData'), 'lean-workspace');
+      if (syncPackagedWorkspace(bundledPath, userWorkspacePath)) {
+        return userWorkspacePath;
+      }
+    } catch (err) {
+      console.warn('[LeanRunner] Failed to sync packaged lean-workspace:', err.message);
+    }
+    return hasWorkspaceSeed(userWorkspacePath) ? userWorkspacePath : bundledPath;
   }
   // In dev: two levels up from src/main/ → repo root → lean-workspace
   return path.join(__dirname, '..', '..', 'lean-workspace');
@@ -127,31 +157,37 @@ class LeanRunner {
   }
 
   /**
-   * Set whether to use the mathlib lake workspace for verification.
-   * Also manages REPL lifecycle when useRepl is enabled.
+   * Tells the LLM whether to emit `import Mathlib` (true) or `import Std` (false).
+   * Does NOT affect which command we run — verify() always uses `lake env lean`.
+   * Recreates the REPL if it was loaded with a different mathlib setting.
    */
   setUsesMathlib(flag) {
+    const changed = this._usesMathlib !== !!flag;
     this._usesMathlib = !!flag;
     if (flag) {
       this._detectMathlibCache();
-      console.log(`[LeanRunner] Mathlib mode: on | cache=${this._mathlibReady ? 'ready' : 'not found'}`);
-      if (this._useRepl && this._mathlibReady) this._ensureRepl();
+      console.log(`[LeanRunner] LLM will use import Mathlib | cache=${this._mathlibReady ? 'ready' : 'not found'}`);
     } else {
-      console.log('[LeanRunner] Mathlib mode: off');
+      console.log('[LeanRunner] LLM will use import Std (core-only)');
+    }
+    // If the REPL is already created with the wrong mathlib flag, recreate it
+    if (changed && this._useRepl && this._repl) {
       this._stopRepl();
+      this._ensureRepl();
     }
   }
 
   /**
-   * Enable or disable the persistent REPL for mathlib verification.
-   * When enabled and mathlib is ready, the REPL starts asynchronously.
+   * Enable or disable the persistent REPL. Independent of mathlib — the REPL
+   * works for both mathlib and core-only code. Creates the LeanRepl instance
+   * eagerly; the actual process starts lazily on first verify() call.
    */
   setUseRepl(flag) {
     this._useRepl = !!flag;
-    if (this._useRepl && this._usesMathlib && this._mathlibReady) {
-      console.log('[LeanRunner] REPL mode: on — starting persistent process');
+    if (this._useRepl) {
+      console.log('[LeanRunner] REPL mode: on (process will start on first verify)');
       this._ensureRepl();
-    } else if (!this._useRepl) {
+    } else {
       if (this._repl) console.log('[LeanRunner] REPL mode: off — stopping persistent process');
       this._stopRepl();
     }
@@ -160,10 +196,16 @@ class LeanRunner {
   get isAvailable()    { return this._available; }
   get binaryPath()     { return this._binaryPath; }
   get mathlibReady()   { return this._mathlibReady; }
-  /** 'repl' when the REPL is active, 'binary' otherwise. */
+  /**
+   * True when it's safe to tell the LLM to generate `import Mathlib`:
+   * the user has opted in AND the olean cache is built. If either is false,
+   * fall back to `import Std`. (verify() itself always uses `lake env lean`
+   * regardless — this getter only controls what the LLM writes.)
+   */
+  get effectiveMathlib() { return this._usesMathlib && this._mathlibReady; }
+  /** 'repl' when the persistent REPL process is live, 'binary' otherwise. */
   get mode() {
-    const useMathlib = this._usesMathlib && this._mathlibReady;
-    return (this._useRepl && useMathlib && this._repl?.isReady) ? 'repl' : 'binary';
+    return (this._useRepl && this._repl?.isReady) ? 'repl' : 'binary';
   }
 
   // ─── Verification ─────────────────────────────────────────────────────────
@@ -187,8 +229,10 @@ class LeanRunner {
   /**
    * Run lean on a snippet of Lean 4 source code.
    *
-   * When usesMathlib is true and mathlibReady, writes the file inside the
-   * lean-workspace lake project so that `import Mathlib` resolves correctly.
+   * Single unified path: always `lake env lean <file>` inside the workspace
+   * when lake is available — this handles both Mathlib and core-only code
+   * correctly (lake just sets up LEAN_PATH; the code decides what to import).
+   * Falls back to direct `lean <file>` only when lake isn't installed.
    *
    * @param {string} leanSource — complete Lean 4 source
    * @param {function} onLine   — called with each output line as it arrives
@@ -204,19 +248,38 @@ class LeanRunner {
       });
     }
 
-    const useMathlib = this._usesMathlib && this._mathlibReady;
-
-    // REPL path: persistent process with Mathlib loaded once — avoids cold starts
-    if (this._useRepl && useMathlib && this._repl?.isReady) {
-      return this._repl.verify(leanSource, onLine, signal);
+    // REPL path: persistent process with a warm env — starts lazily on first call.
+    // Requires useRepl + a LeanRepl instance (created when the repl package is
+    // present in lake-manifest and the user opted in via setUseRepl).
+    if (this._useRepl && this._repl) {
+      return this._verifyViaRepl(leanSource, onLine, signal);
     }
 
-    return useMathlib
-      ? this._verifyWithMathlib(leanSource, onLine, signal)
-      : this._verifyCoreOnly(leanSource, onLine, signal);
+    return this._verifyWithLakeEnv(leanSource, onLine, signal);
   }
 
-  // ─── Core-only verification ───────────────────────────────────────────────
+  /**
+   * Lazy-start the REPL on first verify, then route through it. Falls back to
+   * the lake-env path if the REPL fails to start (e.g. repl binary not built).
+   */
+  async _verifyViaRepl(leanSource, onLine, signal) {
+    if (!this._repl.isReady) {
+      try {
+        await this._repl.start();
+      } catch (err) {
+        console.warn('[LeanRunner] REPL start failed — falling back to lake env for this call:', err.message);
+        return this._verifyWithLakeEnv(leanSource, onLine, signal);
+      }
+      if (!this._repl.isReady) {
+        console.warn('[LeanRunner] REPL start failed — falling back to lake env for this call');
+        return this._verifyWithLakeEnv(leanSource, onLine, signal);
+      }
+    }
+    return this._repl.verify(leanSource, onLine, signal);
+  }
+
+  // ─── Core-only fallback ──────────────────────────────────────────────────
+  // Used ONLY when lake isn't installed. Can't resolve `import Mathlib`.
 
   _verifyCoreOnly(leanSource, onLine, signal) {
     const tmpFile = path.join(this._tmpDir, `verify_${Date.now()}.lean`);
@@ -226,17 +289,18 @@ class LeanRunner {
     return this._runLean(this._binaryPath, [tmpFile], env, undefined /* cwd */, tmpFile, onLine, signal);
   }
 
-  // ─── Mathlib verification ─────────────────────────────────────────────────
-  // Uses `lake env lean <file>` so that the lake project injects the correct
-  // LEAN_PATH entries for mathlib into the lean process environment.
-  // The temp file is placed inside the lake project root.
+  // ─── Lake-env verification (default when lake is installed) ──────────────
+  // Uses `lake env lean <file>` so LEAN_PATH includes every package declared
+  // in the workspace's lakefile (Mathlib, Std, etc.). The temp file is placed
+  // inside the lake project root so lake treats it as an in-project module.
 
-  _verifyWithMathlib(leanSource, onLine, signal) {
+  _verifyWithLakeEnv(leanSource, onLine, signal) {
     // Resolve the `lake` binary — it lives next to lean in elan's bin dir.
     const lakeBin = this._resolveLakeBin();
     if (!lakeBin) {
-      // Fall back to core-only if lake isn't found
-      console.warn('[LeanRunner] lake not found, falling back to core-only verification');
+      // Only hit when `lake` isn't installed at all. Core-only can't resolve
+      // `import Mathlib`, but there's nothing better to try here.
+      console.warn('[LeanRunner] lake not found — falling back to core-only (import Mathlib will fail)');
       return this._verifyCoreOnly(leanSource, onLine, signal);
     }
 
@@ -358,15 +422,44 @@ class LeanRunner {
 
   // ─── REPL lifecycle ───────────────────────────────────────────────────────
 
+  /**
+   * Check if the `repl` package is present in lake-manifest.json. Returns
+   * true only when the user has actually `lake update`d with `require repl`
+   * in their lakefile — otherwise `lake exe repl` would fail to resolve.
+   * Missing or malformed manifest counts as absent.
+   */
+  _detectReplPackage() {
+    const manifestPath = path.join(this._workspacePath, 'lake-manifest.json');
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      return Array.isArray(manifest.packages)
+        && manifest.packages.some(p => p?.name === 'repl');
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Create the LeanRepl instance (but do NOT start the process — that happens
+   * lazily on the first verify() call via _verifyViaRepl). No-op if:
+   *   - the repl package isn't in lake-manifest (lake exe repl would fail), or
+   *   - an instance already exists.
+   */
   _ensureRepl() {
-    if (this._repl?.isReady || this._repl?._startPromise) return;
+    if (this._repl) return;
+    if (!this._detectReplPackage()) {
+      console.warn('[LeanRunner] REPL requested but `repl` package not in lake-manifest — run `lake update` in the workspace');
+      return;
+    }
+    const lakeBin = this._resolveLakeBin();
+    if (!lakeBin) {
+      console.warn('[LeanRunner] REPL requested but `lake` binary not found');
+      return;
+    }
     const { LeanRepl } = require('./lean-repl');
     this._repl = new LeanRepl(this._workspacePath, {
-      lakeBin:       this._resolveLakeBin(),
-      usesMathlib:   true,
-    });
-    this._repl.start().catch(err => {
-      console.error('[LeanRunner] REPL start failed:', err.message);
+      lakeBin,
+      usesMathlib: this._usesMathlib && this._mathlibReady,
     });
   }
 
@@ -409,40 +502,26 @@ class LeanRunner {
   }
 
   /**
-   * Check whether the mathlib olean cache has been downloaded.
-   * B-07: previously only checked the directory existed, which returned true
-   * even for a partial or failed checkout. Now look for at least one .olean
-   * file to confirm the cache is actually built.
+   * Check whether the Mathlib olean cache has been built.
+   *
+   * Previously walked the mathlib directory looking for any .olean file with
+   * a 5000-entry cap, but mathlib ships a full git checkout (~103k source
+   * files + 3.4k subdirs) — the cap was hit long before the DFS found the
+   * build output, making detection spuriously return false. Instead we
+   * directly stat the top-level Mathlib.olean, which only exists once lake
+   * has finished building (either via `lake exe cache get` or `lake build`).
    */
   _detectMathlibCache() {
-    const cacheDir = path.join(this._workspacePath, '.lake', 'packages', 'mathlib');
-    this._mathlibReady = fs.existsSync(cacheDir) && this._hasAnyOlean(cacheDir);
+    const mathlibOlean = path.join(
+      this._workspacePath, '.lake', 'packages', 'mathlib',
+      '.lake', 'build', 'lib', 'lean', 'Mathlib.olean',
+    );
+    this._mathlibReady = fs.existsSync(mathlibOlean);
     if (this._mathlibReady) {
-      console.log('[LeanRunner] Mathlib workspace detected at', this._workspacePath);
+      console.log('[LeanRunner] Mathlib olean cache found:', mathlibOlean);
+    } else {
+      console.log('[LeanRunner] Mathlib olean cache NOT built — run `lake exe cache get` in', this._workspacePath);
     }
-  }
-
-  /**
-   * Walk `dir` looking for any .olean file. Stops as soon as one is found so
-   * this is cheap even on deep trees. Bounded by `maxEntries` to avoid
-   * walking the entire cache if none are present.
-   */
-  _hasAnyOlean(dir, maxEntries = 5000) {
-    const stack = [dir];
-    let seen = 0;
-    while (stack.length && seen < maxEntries) {
-      const d = stack.pop();
-      let entries;
-      try { entries = fs.readdirSync(d, { withFileTypes: true }); }
-      catch { continue; }
-      for (const e of entries) {
-        seen++;
-        if (seen >= maxEntries) return false;
-        if (e.isFile() && e.name.endsWith('.olean')) return true;
-        if (e.isDirectory()) stack.push(path.join(d, e.name));
-      }
-    }
-    return false;
   }
 
   _whichAsync(name) {

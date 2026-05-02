@@ -13,6 +13,11 @@ import { registerInlineCompletions } from '../completion-provider';
 let languageRegistered = false;
 let inlineCompletionsRegistered = false;
 
+function normalizeMarkerEffort(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'max'].includes(key) ? key : 'medium';
+}
+
 function ensureLanguageRegistered() {
   if (languageRegistered) return;
   languageRegistered = true;
@@ -50,7 +55,7 @@ function ensureLanguageRegistered() {
 /**
  * Monaco-based LaTeX editor with:
  * - LaTeX syntax highlighting
- * - [PROVE IT: X] marker decorations
+ * - [PROVE IT: effort] marker decorations
  * - Auto-completion, bracket pairing, environment closing
  * - Keyboard shortcuts
  * - VS Code-style model-per-tab: each tab gets its own ITextModel so undo/redo
@@ -202,7 +207,7 @@ export default function TexEditor({ content, onChange, editorRef, activeTabId, p
         () => { if (onForwardSearch) onForwardSearch(); }
       );
 
-      // Cmd+K: Insert [PROVE IT: Medium] + SKETCH template after the nearest
+      // Cmd+K: Insert [PROVE IT: medium] + SKETCH template after the nearest
       // enclosing/preceding \end{theorem|lemma|...}. Places cursor at the
       // SKETCH line so the user can immediately type their hint.
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => {
@@ -230,7 +235,7 @@ export default function TexEditor({ content, onChange, editorRef, activeTabId, p
         }
 
         const insertAtLine = targetLine !== null ? targetLine + 1 : pos.lineNumber;
-        const template = '% [PROVE IT: Medium]\n% SKETCH: \n';
+        const template = '% [PROVE IT: medium]\n% SKETCH: \n';
         const range = new monaco.Range(insertAtLine, 1, insertAtLine, 1);
 
         editor.executeEdits('fermat-insert-sketch', [{
@@ -327,21 +332,21 @@ export default function TexEditor({ content, onChange, editorRef, activeTabId, p
       const text = model.getValue();
       const lines = text.split('\n');
       const newDecorations = [];
-      const MARKER_REGEX = /\[PROVE\s+IT:\s*(Easy|Medium|Hard)/i;
+      const MARKER_REGEX = /\[PROVE\s+IT:\s*(low|medium|high|max)/i;
 
       lines.forEach((line, idx) => {
         const match = line.match(MARKER_REGEX);
         if (match) {
-          const difficulty = match[1];
+          const effort = normalizeMarkerEffort(match[1]);
           const lineNum = idx + 1;
           newDecorations.push({
             range: new monaco.Range(lineNum, 1, lineNum, 1),
             options: {
               isWholeLine: true,
               className: 'prove-it-decoration',
-              glyphMarginClassName: `prove-it-glyph difficulty-${difficulty.toLowerCase()}`,
+              glyphMarginClassName: `prove-it-glyph effort-${effort}`,
               glyphMarginHoverMessage: {
-                value: `**[PROVE IT: ${difficulty}]** — Click "Prove All" or right-click to prove this`,
+                value: `**[PROVE IT: ${effort}]** — Click "Prove All" or right-click to prove this`,
               },
             },
           });

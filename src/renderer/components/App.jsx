@@ -10,6 +10,7 @@ import SettingsModal from './SettingsModal';
 import LogPanel from './LogPanel';
 import { useCopilot } from '../hooks/useCopilot';
 import { useOutline } from '../hooks/useOutline';
+import { useOutlineAudit } from '../hooks/useOutlineAudit';
 
 // ─── Proof-error toast component ────────────────────────────────────────────
 // Shown when the AI backend returns a structured error (auth, rate-limit, etc.)
@@ -119,14 +120,14 @@ A natural number $p > 1$ is \\emph{prime} if its only positive divisors are $1$ 
 \\label{thm:inf-primes}
 There are infinitely many prime numbers.
 \\end{theorem}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 
 \\begin{lemma}[Division Lemma]
 \\label{lem:division}
 For any integers $a$ and $b > 0$, there exist unique integers $q$ and $r$
 such that $a = bq + r$ and $0 \\leq r < b$.
 \\end{lemma}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \\section{Main Results}
 
@@ -136,7 +137,7 @@ Every integer $n > 1$ can be written uniquely as a product of prime numbers,
 up to the order of factors. This relies on Lemma~\\ref{lem:division}
 and the definition of primes (Definition~\\ref{def:prime}).
 \\end{theorem}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 % SKETCH: Two parts. (1) Existence: strong induction on n; if n is prime
 %   we are done, else n = ab with 1 < a, b < n and apply IH to each factor.
 %   (2) Uniqueness: suppose n = p_1...p_k = q_1...q_l; use Euclid's lemma
@@ -147,7 +148,7 @@ and the definition of primes (Definition~\\ref{def:prime}).
 \\label{cor:sqrt2}
 $\\sqrt{2}$ is irrational. This follows from Theorem~\\ref{thm:fta}.
 \\end{corollary}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \\end{document}`;
 
@@ -294,6 +295,16 @@ export default function App() {
   }, []);
 
   const { outline, refreshOutline } = useOutline(activeTab?.content || '');
+  const {
+    annotatedOutline,
+    auditStatus,
+    auditError,
+    refreshAudit,
+  } = useOutlineAudit({
+    content: activeTab?.content || '',
+    filePath: activeTab?.filePath || null,
+    outline,
+  });
   const {
     proofTasks,
     pendingReviews,
@@ -533,7 +544,7 @@ export default function App() {
       if (busyMarkerIds.has(node.id)) { skipped++; continue; }
       submitMarker({
         id: node.id,
-        difficulty: node.proveItMarker.difficulty,
+        effort: node.proveItMarker.effort,
         label: `${node.type}: ${node.name}`,
         lineNumber: node.lineNumber,
         preferredModel: node.proveItMarker.preferredModel,
@@ -574,11 +585,11 @@ export default function App() {
       }
 
       // Pass 2: full-document scan
-      const wantedDiff = marker.difficulty;
+      const wantedEffort = marker.effort;
       let fallbackIdx = -1;
       for (let i = 0; i < lines.length; i++) {
         if (!lines[i].includes('[PROVE IT:')) continue;
-        if (wantedDiff && lines[i].includes(wantedDiff)) { fallbackIdx = i; break; }
+        if (wantedEffort && lines[i].toLowerCase().includes(String(wantedEffort).toLowerCase())) { fallbackIdx = i; break; }
         if (fallbackIdx < 0) fallbackIdx = i;
       }
       if (fallbackIdx >= 0 && tryReplaceAt(fallbackIdx)) return { ...tab, content: lines.join('\n'), isDirty: true };
@@ -588,7 +599,7 @@ export default function App() {
     }));
   }, [activeTabId]);
 
-  // Auto-inline handler for Easy proofs
+  // Auto-inline handler for low-effort proofs
   const handleAutoInline = useCallback((data) => {
     console.log('[Fermat] Auto-inlining proof for', data.marker?.label || data.marker?.id);
     insertProofAtMarker(data.marker, data.proof);
@@ -769,8 +780,11 @@ export default function App() {
         {showOutline && (
           <>
             <TheoryOutline
-              outline={outline}
+              outline={annotatedOutline}
               proofTasks={proofTasks}
+              auditStatus={auditStatus}
+              auditError={auditError}
+              onRefreshAudit={activeTab?.filePath ? refreshAudit : null}
               onNodeClick={handleOutlineClick}
               style={{ width: outlineWidth, minWidth: 140, maxWidth: 500 }}
             />
@@ -837,20 +851,25 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                {/* Panel content */}
-                {rightTab === 'pdf' || !leanState
-                  ? <PdfViewer
-                      onCompile={handleCompile}
-                      onInverseSearch={handleInverseSearch}
-                      forwardHighlight={forwardHighlight}
-                    />
-                  : <LeanPanel
+                {/* Panel content — both stay mounted; CSS controls visibility so
+                    PdfViewer never loses its compiled PDF when switching tabs. */}
+                <div style={{ display: rightTab === 'pdf' || !leanState ? 'flex' : 'none', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+                  <PdfViewer
+                    onCompile={handleCompile}
+                    onInverseSearch={handleInverseSearch}
+                    forwardHighlight={forwardHighlight}
+                  />
+                </div>
+                {leanState && (
+                  <div style={{ display: rightTab === 'lean' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minWidth: 0, minHeight: 0 }}>
+                    <LeanPanel
                       leanState={leanState}
                       onConfirmStatement={handleConfirmStatement}
                       onEditStatement={handleEditStatement}
                       onCancelStatement={handleCancelStatement}
                     />
-                }
+                  </div>
+                )}
               </div>
             </>
           )}

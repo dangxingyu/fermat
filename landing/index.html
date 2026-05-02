@@ -953,8 +953,8 @@
           <div class="feature-badge">P</div>
           <h3>AI proof assistant</h3>
           <p>
-            Mark a theorem with <code>% [PROVE IT: Hard]</code>. Claude runs a three-phase
-            pipeline — <em>sketch</em> the approach, <em>prove</em> it rigorously, then
+            Mark a theorem with <code>% [PROVE IT: max]</code>. Claude runs a long-range
+            pipeline — audit the context, plan obligations, draft proofs, then
             <em>verify</em> the result. Context-aware: it reads your definitions and prior lemmas.
           </p>
         </div>
@@ -991,7 +991,7 @@
         <h2>One comment is all it takes.</h2>
         <p>
           Fermat watches your document for <code style="font-family: var(--font-mono); color: var(--gold);">[PROVE IT: …]</code>
-          markers. Easy proofs auto-inline. Medium and Hard proofs land in a review panel
+          markers. Low-effort proofs auto-inline. Review-mode proofs land in a review panel
           where you can read, edit, and accept — or reject — before they touch your document.
         </p>
       </div>
@@ -1009,7 +1009,7 @@
 For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
 <span class="cmd">$\sum_{a \in A} \frac{1}{a \log a} \leq 1 + O(1/\log x)$</span>.
 <span class="kw">\end</span>{<span class="env">theorem</span>}
-<span class="marker hl">% [PROVE IT: Hard]</span>        <span class="cmt">← Fermat queues a three-phase proof task</span>
+<span class="marker hl">% [PROVE IT: max]</span>         <span class="cmt">← Fermat queues a long-range proof task</span>
 <span class="cmt">% SKETCH: Reduce to a critical family parametrised by the</span>
 <span class="cmt">%   anatomy-of-integers Markov structure (Price 2026).</span>
 
@@ -1022,8 +1022,8 @@ For every primitive <span class="cmd">$A \subseteq [x, \infty)$</span>,
       </div>
 
       <p class="code-caption reveal">
-        Click <strong>Submit&nbsp;All</strong> in the toolbar. Easy proofs appear instantly inline.
-        Hard proofs wait for your review — with the generated LaTeX, the sketch, and the verdict
+        Click <strong>Submit&nbsp;All</strong> in the toolbar. Low-effort proofs appear instantly inline.
+        Review-mode proofs wait for your review — with the generated LaTeX, the plan, and the verdict
         all visible before anything is written to your file.
       </p>
     </div>

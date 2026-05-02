@@ -109,7 +109,8 @@ export function useCopilot({ onAutoInline } = {}) {
       // Simulate completion after 2s
       setTimeout(() => {
         const fakeProof = `\\begin{proof}\nThis follows directly from the definitions. [Simulated proof in dev mode]\n\\end{proof}`;
-        const autoInline = marker.difficulty === 'Easy';
+        const effort = String(marker.effort || 'medium').toLowerCase();
+        const autoInline = effort === 'low';
         setProofTasks(prev => {
           const next = new Map(prev);
           next.set(taskId, { taskId, marker, status: 'completed', proof: fakeProof });

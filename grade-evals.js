@@ -7,7 +7,8 @@ const path = require('path');
 
 const WS = path.join(__dirname, 'fermat-skills-workspace/iteration-1');
 
-const evals = ['prove-easy-inf-primes', 'prove-hard-fta', 'verify-good-fta', 'verify-bad-fta', 'sketch-hard-fta'];
+const evals = fs.readdirSync(WS)
+  .filter(name => fs.existsSync(path.join(WS, name, 'eval_metadata.json')));
 
 function grade(evalDir) {
   const meta = JSON.parse(fs.readFileSync(path.join(WS, evalDir, 'eval_metadata.json'), 'utf-8'));

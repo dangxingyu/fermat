@@ -1,10 +1,12 @@
+const crypto = require('crypto');
+
 /**
  * OutlineParser
  *
  * Parses LaTeX source to extract a structured theory outline:
  * - Theorems, Lemmas, Propositions, Corollaries, Definitions, Remarks
  * - Detects \label{} and \ref{} to build a dependency graph
- * - Detects [PROVE IT: X] markers and their status
+ * - Detects [PROVE IT: effort] markers and their status
  * - Extracts preamble (everything before \begin{document})
  * - Preserves full statement text and proof text for each node
  * - Extracts custom command/environment definitions from preamble
@@ -26,7 +28,7 @@ const THEOREM_ENVS = [
 // source strings + flags and build fresh RegExp instances inside the parser
 // function, and for iteration we use `matchAll()` (which doesn't mutate the
 // regex's lastIndex) so exception paths can't poison subsequent parses.
-const PROVE_IT_SRC = [String.raw`\[PROVE\s+IT:\s*(Easy|Medium|Hard)(?:\s*,\s*model\s*=\s*(\w+))?\]`, 'gi'];
+const PROVE_IT_SRC = [String.raw`\[PROVE\s+IT:\s*(low|medium|high|max)(?:\s*,\s*model\s*=\s*([\w.-]+))?\]`, 'gi'];
 const LABEL_SRC    = [String.raw`\\label\{([^}]+)\}`,                                                   'g'];
 const REF_SRC      = [String.raw`\\(?:ref|eqref|cref|Cref|autoref)\{([^}]+)\}`,                         'g'];
 const BEGIN_ENV_REGEX = /\\begin\{(\w+)\}(?:\[([^\]]*)\])?/;
@@ -38,6 +40,32 @@ const SECTION_REGEX = /\\(section|subsection|subsubsection|chapter|part)\*?\{([^
 const reProveIt = () => new RegExp(PROVE_IT_SRC[0], PROVE_IT_SRC[1]);
 const reLabel   = () => new RegExp(LABEL_SRC[0],    LABEL_SRC[1]);
 const reRef     = () => new RegExp(REF_SRC[0],      REF_SRC[1]);
+
+function stableHash(value) {
+  return crypto
+    .createHash('sha256')
+    .update(String(value || ''), 'utf8')
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function statementHash(value) {
+  return stableHash(String(value || '').replace(/\s+/g, ' ').trim());
+}
+
+function normalizeProveEffort(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'max'].includes(key) ? key : 'medium';
+}
+
+function makeProveItMarker(match, extra = {}) {
+  const effort = normalizeProveEffort(match[1]);
+  return {
+    effort,
+    preferredModel: match[2] || null,
+    ...extra,
+  };
+}
 
 function parseTheoryOutline(texContent) {
   const lines = texContent.split('\n');
@@ -137,6 +165,7 @@ function parseTheoryOutline(texContent) {
           ...currentNode._bodyLines,
           line,
         ].join('\n');
+        currentNode.statementHash = statementHash(currentNode.statementTeX);
 
         // Extract labels from body
         const body = currentNode._bodyLines.join('\n');
@@ -152,11 +181,7 @@ function parseTheoryOutline(texContent) {
 
         // Check for PROVE IT markers in body
         for (const lm of body.matchAll(reProveIt())) {
-          currentNode.proveItMarker = {
-            difficulty: lm[1],
-            preferredModel: lm[2] || null,
-            offset: lm.index,
-          };
+          currentNode.proveItMarker = makeProveItMarker(lm, { offset: lm.index });
         }
 
         // ─── Fallback display name for unnamed nodes ───
@@ -234,11 +259,7 @@ function parseTheoryOutline(texContent) {
       for (const pm of line.matchAll(reProveIt())) {
         const lastNode = [...nodes].reverse().find(n => THEOREM_ENVS.includes(n.type));
         if (lastNode && !lastNode.proveItMarker) {
-          lastNode.proveItMarker = {
-            difficulty: pm[1],
-            preferredModel: pm[2] || null,
-            lineNumber: lineNum,
-          };
+          lastNode.proveItMarker = makeProveItMarker(pm, { lineNumber: lineNum });
         }
       }
 

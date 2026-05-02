@@ -22,6 +22,10 @@ You may receive:
 - `<knowledge_ledger>`.
 - `<knowledge_review>`.
 - `<proof_plan>`.
+- `<proof_notebook>`: target-local high/max proof notes, obligations, failed
+  routes, and supported claims.
+- `<research_review>`: source-backed facts or open questions extracted from
+  existing project source material.
 - `<proof_to_verify>`.
 - `<full_document>`.
 
@@ -39,6 +43,11 @@ Check all of the following:
    - source-backed with matching conditions (`T1_SOURCE_BACKED`);
    - proved inline before use;
    - explicitly assumed in the theorem hypotheses.
+7. For high/max-effort proofs, the proof must respect `<proof_notebook>`:
+   - `supported_claims` with `cite_directly` may be used only when their source
+     is document-proved or source-backed with matching conditions;
+   - `proof_obligations` must be proved inline or rejected as blocked;
+   - `discarded_routes` and `do_not_use` entries are forbidden.
 
 Unsupported uses of `T2_ALMOST_SURE` or `T3_LIKELY_PROVABLE` are failures unless the proof proves them inline. Any use of `T4_SPECULATIVE`, `N1_LIKELY_FALSE`, `X_REFUTED`, or `do_not_use` is a critical failure.
 

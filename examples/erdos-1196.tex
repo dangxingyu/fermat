@@ -23,9 +23,9 @@
 %   primitive A ⊂ [x, infty), S(A) ≤ 1 + O(1/log x). Formalized in Lean.
 %
 %   This file is a graduated test for Fermat's proof pipeline:
-%     • Easy   → definitions + trivial observations
-%     • Medium → Erdős 1935 boundedness + Mertens on primes
-%     • Hard   → the main Erdős-Sárközy-Szemerédi 1+o(1) conjecture itself
+%     • low    → definitions + trivial observations
+%     • medium → source-aware estimates and boundedness lemmas
+%     • max    → the main Erdős-Sárközy-Szemerédi 1+o(1) conjecture itself
 % ────────────────────────────────────────────────────────────────────────────
 
 \begin{document}
@@ -53,7 +53,7 @@ For a primitive set $A \subseteq \mathbb{N}_{\geq 2}$, define
 The set of prime numbers $\mathbb{P} = \{2, 3, 5, 7, 11, \ldots\}$
 is a primitive subset of $\mathbb{N}_{\geq 2}$.
 \end{lemma}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 % SKETCH: Two distinct primes p != q cannot satisfy p | q, since the only
 %   positive divisors of a prime q are 1 and q, and p > 1, p != q.
 
@@ -61,7 +61,7 @@ is a primitive subset of $\mathbb{N}_{\geq 2}$.
 \label{lem:subset-primitive}
 If $A$ is primitive and $B \subseteq A$, then $B$ is primitive.
 \end{lemma}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 % SKETCH: Any pair in B is also a pair in A, so the non-divisibility
 %   property is inherited.
 
@@ -75,7 +75,7 @@ As $x \to \infty$,
 \]
 where $M \approx 0.2615$ is the Meissel--Mertens constant.
 \end{lemma}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 % SKETCH: Standard PNT-adjacent estimate. Use partial summation against
 %   theta(x) = sum_{p <= x} log p, together with the PNT-style bound
 %   theta(x) = x + O(x / log x), to convert sum 1/p into an integral
@@ -90,7 +90,7 @@ For primes $\mathbb{P}_x := \mathbb{P} \cap [x, \infty)$,
 \]
 In particular $S(\mathbb{P}_x) = o(1)$.
 \end{proposition}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 % SKETCH: Partial summation. Let pi(t) be the prime counting function;
 %   use pi(t) = O(t / log t) (Chebyshev/PNT) and integrate 1/(t log^2 t)
 %   from x to infinity to get a 1/log x bound.
@@ -105,7 +105,7 @@ set $A \subseteq \mathbb{N}_{\geq 2}$,
   S(A) \;=\; \sum_{a \in A} \frac{1}{a \log a} \;\leq\; C.
 \]
 \end{theorem}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 % SKETCH: Classical argument. For each a in A, associate the "multiplicative
 %   interval" M_a = { n in N : a | n, n/a has all prime factors < p(a) },
 %   where p(a) is the smallest prime factor of a. The M_a are pairwise
@@ -119,7 +119,7 @@ set $A \subseteq \mathbb{N}_{\geq 2}$,
 For every primitive set $A \subseteq \mathbb{N}_{\geq 2}$ the sum
 $\sum_{a \in A} 1/(a \log a)$ converges.
 \end{corollary}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 
 \section{The Erdős--Sárközy--Szemerédi Conjecture}
 
@@ -132,7 +132,7 @@ For every $x \geq 2$ and every primitive set $A \subseteq [x, \infty)$,
 Consequently, $\sup_{A \subset [x,\infty) \text{ primitive}} S(A) = 1 + o(1)$
 as $x \to \infty$.
 \end{conjecture}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 % SKETCH: This is the main Erdős Problem #1196. The idea (per Price's
 %   recent argument) is to reduce to a "critical" family of primitive sets
 %   parametrised by a Markov-style branching structure on the anatomy
@@ -148,7 +148,7 @@ The bound in Theorem~\ref{thm:erdos-1196} is tight: the set of primes
 in $[x, \infty)$ gives $S(\mathbb{P}_x) = 1 - o(1)$ is \emph{not} achieved,
 but the family of "primes times a fixed integer" approaches $1$.
 \end{corollary}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 % SKETCH: For k >= 1 fixed, the set A_k = { kp : p prime, kp >= x }
 %   is primitive (distinct primes do not divide each other, and the
 %   common factor k is shared). Evaluate S(A_k) using Mertens and

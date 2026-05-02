@@ -329,11 +329,11 @@ The `contextPrompt.slice(0, 800)` is the most damaging item. The context built b
 
 The `naturalProof` (LaTeX proof text) is included in full. This is mathematically valuable guidance but notionally foreign: "by Euclid's lemma" doesn't help Claude write `Nat.Prime.dvd_mul`. A **Lean-reformulation step** — one additional `_callLlm` before the sketch that asks Claude to restate the theorem and key lemmas in Lean terms — would convert the LaTeX mathematical context into directly actionable Lean guidance.
 
-### 3b.5 Easy/Hard proof strategy: no distinction
+### 3b.5 Effort-aware proof strategy: no distinction
 
-The LaTeX prove skill carefully calibrates output length by difficulty (Easy: 3–8 lines; Hard: 20+). The Lean phase makes no such calibration. Every theorem goes through full sketch→fill→verify regardless of whether the Lean proof is `by norm_num` (1 line) or a 50-line induction.
+The LaTeX pipeline now calibrates by proof effort (`low`, `medium`, `high`, `max`). The Lean phase makes no such calibration. Every theorem goes through full sketch→fill→verify regardless of whether the Lean proof is `by norm_num` (1 line) or a 50-line induction.
 
-An obvious win: before the sketch phase, add a "classify Lean difficulty" prompt that produces one of:
+An obvious win: before the sketch phase, add a "classify Lean effort" prompt that produces one of:
 - `trivial` → attempt `by decide`/`norm_num`/`ring`/`omega` directly (no sketch needed)
 - `tactic` → standard sketch→fill pipeline
 - `structural` → sketch→fill with induction/recursion guidance
@@ -351,7 +351,7 @@ Trivial proofs currently waste 3–6 API calls going through sketch→fill when 
 | No few-shot Lean examples in any prompt | High | S: add 1–2 examples |
 | No Lean-specific skill file | High | M: create fermat-lean-sketch SKILL.md |
 | No Lean-reformulation step | Medium | M: add pre-sketch LLM call |
-| No easy/hard proof strategy split | Medium | M: add classifier |
+| No effort-aware proof strategy split | Medium | M: add classifier |
 
 ---
 

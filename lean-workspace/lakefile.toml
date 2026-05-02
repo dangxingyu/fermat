@@ -14,5 +14,10 @@ name = "mathlib"
 scope = "leanprover-community"
 rev = "v4.29.0"
 
+[[require]]
+name = "repl"
+git = "https://github.com/leanprover-community/repl.git"
+rev = "v4.29.0"
+
 [[lean_lib]]
 name = "FermatLean"

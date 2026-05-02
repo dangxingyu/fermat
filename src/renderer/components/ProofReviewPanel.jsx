@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 /**
- * Proof Review Panel — shows AI-generated proofs for Medium/Hard markers.
+ * Proof Review Panel — shows AI-generated proofs for medium/high/max effort markers.
  * User can accept (inserts into doc), reject, or edit before accepting.
  */
 export default function ProofReviewPanel({ reviews, onAccept, onReject }) {
@@ -25,7 +25,7 @@ export default function ProofReviewPanel({ reviews, onAccept, onReject }) {
           }}>
             No proofs to review.
             <br /><br />
-            Medium and Hard proofs will appear here for review before being inserted.
+            Proofs that are not auto-inlined will appear here for review before insertion.
           </div>
         )}
       </div>
@@ -65,14 +65,18 @@ function ProofCard({ review, onAccept, onReject }) {
     <div className="proof-card">
       <div className="proof-card-header">
         <span>{review.marker?.label || 'Proof'}</span>
-        <span className={`difficulty ${review.marker?.difficulty}`}>
-          {review.marker?.difficulty}
+        <span className={`effort ${review.marker?.effort || 'medium'}`}>
+          {review.marker?.effort || 'medium'}
         </span>
       </div>
 
       <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 8 }}>
         Model: {review.model || 'claude'} &middot; Line {review.marker?.lineNumber}
       </div>
+
+      {(review.maxPipeline || review.proofPipeline || review.proofNotebook) && (
+        <EffortPipelineNotes review={review} />
+      )}
 
       {editing ? (
         <textarea
@@ -112,4 +116,77 @@ function ProofCard({ review, onAccept, onReject }) {
       </div>
     </div>
   );
+}
+
+function EffortPipelineNotes({ review }) {
+  const pipeline = review.maxPipeline || review.proofPipeline || {};
+  const attempts = Array.isArray(pipeline.attempts) ? pipeline.attempts : [];
+  const notebook = review.proofNotebook || pipeline.notebook || '';
+  const notebookStatus = extractTag(notebook, 'status') || 'unknown';
+  const notebookSummary = extractTag(notebook, 'summary');
+  const finalVerdict = extractVerdictTag(pipeline.finalVerdict || review.verdict);
+  const selected = pipeline.selectedAttempt === 'repair'
+    ? 'repair pass'
+    : Number.isInteger(pipeline.selectedAttempt)
+    ? `selected ${pipeline.selectedAttempt}`
+    : 'no selected pass';
+
+  return (
+    <details className="proof-pipeline-notes">
+      <summary>
+        <span>{pipeline.mode === 'max-long-range' ? 'Max pipeline' : 'Proof pipeline'}</span>
+        <span>{attempts.length} drafts &middot; {finalVerdict} &middot; {selected}</span>
+      </summary>
+      <div className="proof-pipeline-body">
+        <div className="proof-pipeline-row">
+          <span>Notebook</span>
+          <span>{notebookStatus}</span>
+        </div>
+        {notebookSummary && (
+          <p>{notebookSummary}</p>
+        )}
+        {attempts.length > 0 && (
+          <div className="proof-attempt-list">
+            {attempts.map((attempt, index) => (
+              <div className="proof-attempt-row" key={`${attempt.role || 'attempt'}-${attempt.index ?? index}`}>
+                <span>{attempt.role || `attempt ${index + 1}`}</span>
+                <span>{attempt.verdictTag || extractVerdictTag(attempt.verdict)}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {pipeline.repairNotebook && (
+          <div className="proof-pipeline-row">
+            <span>Repair pass</span>
+            <span>{extractTag(pipeline.repairNotebook, 'status') || 'ran'}</span>
+          </div>
+        )}
+        {(review.research || pipeline.research) && (
+          <div className="proof-pipeline-row">
+            <span>Research pass</span>
+            <span>{extractResearchSignal(review.research || pipeline.research)}</span>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function extractTag(text, tagName) {
+  const pattern = new RegExp(`<${tagName}>\\s*([\\s\\S]*?)\\s*</${tagName}>`, 'i');
+  const match = String(text || '').match(pattern);
+  return match ? match[1].trim() : '';
+}
+
+function extractVerdictTag(text) {
+  const match = String(text || '').match(/<verdict>\s*(PASS|NEEDS_REVISION|FAIL)\s*<\/verdict>/i) ||
+    String(text || '').match(/<verdict>\s*(PASS|NEEDS_REVISION|FAIL)\b/i);
+  return match ? match[1].toUpperCase() : 'UNKNOWN';
+}
+
+function extractResearchSignal(text) {
+  const body = String(text || '');
+  if (/<source_backed_facts>\s*<fact\b/i.test(body)) return 'source-backed facts';
+  if (/<open_questions>\s*<question\b/i.test(body)) return 'open questions';
+  return 'reviewed';
 }

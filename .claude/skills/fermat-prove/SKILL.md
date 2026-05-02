@@ -24,6 +24,11 @@ The prompt may include:
 - `<knowledge_ledger>`.
 - `<knowledge_review>`.
 - `<proof_plan>`.
+- `<proof_notebook>`: high/max-effort proof obligations, supported claims,
+  discarded routes, and next actions from the target-local notebook.
+- `<research_review>`: source-discipline review from existing project papers,
+  bibliography snippets, or ledger material. It can support use only when it
+  records matching source conditions.
 - `<user_sketch>`.
 - `<full_document>`.
 
@@ -48,12 +53,15 @@ The phrase "standard fact" is not a license. A fact is usable only if it is:
 ## How To Write
 
 1. Read `<proof_plan>` first if present.
-2. Identify every obligation marked `prove_inline` or `prove_as_sublemma`.
-3. Before using such an obligation, prove it as a short internal claim.
-4. If an obligation cannot be proved under the target assumptions, do not fake the proof.
-5. Match the author's notation and proof style from `<full_document>`.
-6. Use `\ref{...}` only for labels that appear in the context.
-7. Keep Easy proofs concise, Medium proofs complete, and Hard proofs explicit.
+2. For high/max effort targets, also read `<proof_notebook>` and treat it as
+   the latest obligation ledger.
+3. Identify every obligation marked `prove_inline` or `prove_as_sublemma`.
+4. Before using such an obligation, prove it as a short internal claim.
+5. If an obligation cannot be proved under the target assumptions, do not fake the proof.
+6. Match the author's notation and proof style from `<full_document>`.
+7. Use `\ref{...}` only for labels that appear in the context.
+8. Match the requested effort: low proofs are concise, medium proofs are
+   complete, high/max proofs are explicit about every obligation.
 
 ## Blocked Proofs
 

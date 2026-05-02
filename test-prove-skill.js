@@ -37,14 +37,14 @@ A natural number $p > 1$ is \\emph{prime} if its only positive divisors are $1$ 
 \\label{thm:inf-primes}
 There are infinitely many prime numbers.
 \\end{theorem}
-% [PROVE IT: Easy]
+% [PROVE IT: low]
 
 \\begin{lemma}[Division Lemma]
 \\label{lem:division}
 For any integers $a$ and $b > 0$, there exist unique integers $q$ and $r$
 such that $a = bq + r$ and $0 \\leq r < b$.
 \\end{lemma}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \\section{Main Results}
 
@@ -54,13 +54,13 @@ Every integer $n > 1$ can be written uniquely as a product of prime numbers,
 up to the order of factors. This relies on Lemma~\\ref{lem:division}
 and the definition of primes (Definition~\\ref{def:prime}).
 \\end{theorem}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 
 \\begin{corollary}
 \\label{cor:sqrt2}
 $\\sqrt{2}$ is irrational. This follows from Theorem~\\ref{thm:fta}.
 \\end{corollary}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 
 \\end{document}`;
 
@@ -134,7 +134,7 @@ async function main() {
   // Save output
   const outDir = path.join(__dirname, 'test-outputs');
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir);
-  fs.writeFileSync(path.join(outDir, 'prove-easy-inf-primes.tex'), proof);
+  fs.writeFileSync(path.join(outDir, 'prove-low-inf-primes.tex'), proof);
   fs.writeFileSync(path.join(outDir, 'context-prompt.txt'), `SYSTEM:\n${systemPrompt}\n\nUSER:\n${userPrompt}`);
   console.log('\nSaved to test-outputs/');
 }

@@ -5,6 +5,21 @@ const os = require('os');
 const { ContextAssembler } = require('./context-assembler');
 const { parseTheoryOutline } = require('./outline-parser');
 const { ClaudeProvider, resolveModelId } = require('./llm-provider');
+const {
+  buildOutlineAuditPrompt,
+  documentHash,
+  extractJsonObject,
+  loadOutlineAudit,
+  normalizeOutlineAudit,
+  saveOutlineAudit,
+} = require('./outline-audit');
+const {
+  appendProofRunEvent,
+  buildSchedulerDecision,
+  createProofRun,
+  formatSchedulerDecisionForPrompt,
+  persistProofRunArtifacts,
+} = require('./proof-run');
 
 /**
  * Classify an API/network error into a structured { code, userMessage } pair
@@ -42,6 +57,11 @@ function classifyAndAnnotateError(err) {
   err.fermatCode = code;
   err.fermatUserMessage = userMessage;
   return err;
+}
+
+function normalizeProofEffort(value) {
+  const key = String(value || '').trim().toLowerCase();
+  return ['low', 'medium', 'high', 'max'].includes(key) ? key : 'medium';
 }
 
 /**
@@ -118,7 +138,7 @@ class ClaudeCodeBackend {
    * Execute a proving workflow for a given marker.
    *
    * @param {string} texContent  — full document content
-   * @param {object} marker      — { id, difficulty, label, lineNumber, ... }
+   * @param {object} marker      — { id, effort, label, lineNumber, ... }
    * @param {object} options     — { apiKey, model, skipVerify, onStream, onStatus,
    *                                  verificationMode, leanRunner, maxLeanRetries,
    *                                  onStatementReview, taskId, signal }
@@ -143,15 +163,15 @@ class ClaudeCodeBackend {
     const ctx = this.contextAssembler.assembleForProof(outline, targetNode, { knowledgeLedger });
     const contextPrompt = this.contextAssembler.formatAsPrompt(ctx);
 
-    const difficulty = targetNode.proveItMarker?.difficulty || 'Medium';
+    const effort = normalizeProofEffort(targetNode.proveItMarker?.effort);
     const whichPath = this._hasClaudeCli ? 'Claude CLI' : 'direct API';
-    console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | difficulty=${difficulty} | path=${whichPath} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length} | ledger=${knowledgeLedger?.path ? 'yes' : 'no'}`);
+    console.log(`[Prove] Target: ${targetNode.type} "${targetNode.name || targetNode.labels?.[0]}" | effort=${effort} | path=${whichPath} | context=${contextPrompt.length}ch | deps=${ctx.directDependencies.length} | ledger=${knowledgeLedger?.path ? 'yes' : 'no'}`);
 
     if (!this._hasClaudeCli && !options.apiKey) {
       const err = new Error('No API key configured and Claude Code CLI not available.');
       throw classifyAndAnnotateError(err);
     }
-    let results = await this._proveThreePhase(contextPrompt, difficulty, targetNode, options);
+    let results = await this._proveThreePhase(contextPrompt, effort, targetNode, { ...options, marker });
 
     if (options.verificationMode === 'lean' && options.leanRunner?.isAvailable) {
       results = await this._leanSketchFillVerify(results, contextPrompt, targetNode, options);
@@ -161,16 +181,86 @@ class ClaudeCodeBackend {
   }
 
   /**
-   * Unified natural-language prove pipeline.
-   * Phases: Knowledge review (Medium/Hard) → Plan (Medium/Hard) →
-   * Prove → Verify + 1 self-correction.
+   * Run a project-level semantic audit for the outline sidebar.
+   *
+   * This is intentionally separate from proving: it can suggest dependencies
+   * and obligations, but it never licenses them as usable proof facts.
    */
-  async _proveThreePhase(contextPrompt, difficulty, targetNode, options) {
+  async auditOutline(texContent, options = {}) {
+    const {
+      filePath = null,
+      outline: providedOutline = null,
+      apiKey,
+      model,
+      signal,
+      force = false,
+    } = options;
+
+    if (signal?.aborted) {
+      const err = new Error('Cancelled before outline audit');
+      err.code = 'FERMAT_CANCELLED';
+      throw err;
+    }
+
+    const outline = providedOutline || parseTheoryOutline(texContent);
+    const hash = documentHash(texContent);
+
+    if (filePath && !force) {
+      try {
+        const cached = loadOutlineAudit({ filePath, texContent, outline });
+        if (cached?.documentHash === hash && !cached.isStale) {
+          console.log(`[OutlineAudit] Cache hit: ${cached.auditPath}`);
+          return { ...cached, skipped: true };
+        }
+      } catch (err) {
+        console.warn(`[OutlineAudit] Ignoring unreadable cached audit: ${err.message}`);
+      }
+    }
+
+    if (!this._hasClaudeCli && !apiKey) {
+      const err = new Error('No API key configured and Claude Code CLI not available.');
+      throw classifyAndAnnotateError(err);
+    }
+
+    const knowledgeLedger = this._loadKnowledgeLedger({ filePath });
+    const prompt = buildOutlineAuditPrompt({
+      outline,
+      texContent,
+      filePath,
+      knowledgeLedger,
+    });
+    const skill = this._loadSkill('fermat-outline-audit');
+
+    console.log(`[OutlineAudit] Auditing ${outline.nodes?.length || 0} outline nodes | hash=${hash}`);
+    const raw = await this._callLlm(prompt, null, apiKey, model, skill, signal);
+    const parsed = extractJsonObject(raw);
+    const audit = normalizeOutlineAudit(parsed, { outline, texContent, filePath });
+
+    let auditPath = null;
+    if (filePath) {
+      auditPath = saveOutlineAudit(audit, filePath);
+      console.log(`[OutlineAudit] Saved: ${auditPath}`);
+    }
+
+    return { ...audit, auditPath, skipped: false };
+  }
+
+  /**
+   * Unified natural-language prove pipeline.
+   * Effort levels:
+   * low    → direct proof, usually auto-inlined/skips verify by config.
+   * medium → knowledge → plan → prove → verify + 1 self-correction.
+   * high   → target notebook → parallel drafts → verifier ensemble → repair.
+   * max    → long-range staged search with notebook updates between stages.
+   *
+   */
+  async _proveThreePhase(contextPrompt, effort, targetNode, options) {
     const { onStream, apiKey, model, signal } = options;
+    effort = normalizeProofEffort(effort);
     const results = {};
     let workingContext = contextPrompt;
 
-    if (difficulty !== 'Easy') {
+    if (effort !== 'low') {
       console.log('[Prove] Phase 1/4: knowledge review (fermat-knowledge skill)');
       const knowledgeSkill = this._loadSkill('fermat-knowledge');
       const tk0 = Date.now();
@@ -185,7 +275,15 @@ class ClaudeCodeBackend {
       console.log(`[Prove] Sketch done (${Date.now() - t0}ms, ${results.sketch.length}ch)`);
     }
 
-    console.log(`[Prove] Phase ${difficulty === 'Easy' ? '1/1' : '3/4'}: prove (fermat-prove skill)`);
+    if (effort === 'max') {
+      return this._proveMaxPipeline(workingContext, results, targetNode, options);
+    }
+
+    if (effort === 'high') {
+      return this._proveHighPipeline(workingContext, results, targetNode, options);
+    }
+
+    console.log(`[Prove] Phase ${effort === 'low' ? '1/1' : '3/4'}: prove (fermat-prove skill)`);
     const proveSkill = this._loadSkill('fermat-prove');
     let proveInput = workingContext;
     const proofPlanBlock = results.sketch
@@ -199,7 +297,7 @@ class ClaudeCodeBackend {
     console.log(`[Prove] Proof draft done (${Date.now() - tp0}ms, ${proofOutput.length}ch)`);
 
     if (!options.skipVerify) {
-      console.log(`[Prove] Phase ${difficulty === 'Easy' ? 'verify' : '4/4'}: verify (fermat-verify skill)`);
+      console.log(`[Prove] Phase ${effort === 'low' ? 'verify' : '4/4'}: verify (fermat-verify skill)`);
       const verifySkill = this._loadSkill('fermat-verify');
       const verifyInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
       const tv0 = Date.now();
@@ -229,6 +327,436 @@ class ClaudeCodeBackend {
     return results;
   }
 
+  async _proveHighPipeline(workingContext, results, targetNode, options) {
+    const { onStream, onStatus, apiKey, model, signal } = options;
+    const pipeline = {
+      mode: 'high-research',
+      attempts: [],
+      selectedAttempt: null,
+      finalVerdict: null,
+    };
+    results.proofPipeline = pipeline;
+
+    const emitStatus = (phase, extra = {}) => {
+      if (onStatus) onStatus({ phase, ...extra });
+      console.log(`[EffortPipeline] ${phase}`, extra);
+    };
+
+    emitStatus('high-notebook');
+    const notebookSkill = this._loadSkill('fermat-proof-notebook');
+    const proofPlanBlock = results.sketch
+      ? this._asTaggedBlock('proof_plan', results.sketch)
+      : '';
+    const notebookInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}`;
+    const tNotebook = Date.now();
+    results.proofNotebook = await this._callLlm(
+      notebookInput,
+      onStream,
+      apiKey,
+      model,
+      notebookSkill,
+      signal,
+    );
+    pipeline.notebook = results.proofNotebook;
+    pipeline.notebookStatus = this._extractTagText(results.proofNotebook, 'status') || 'unknown';
+    let attemptContext = `${notebookInput}\n\n${this._asTaggedBlock('proof_notebook', results.proofNotebook)}`;
+    console.log(`[EffortPipeline] Notebook done (${Date.now() - tNotebook}ms, ${results.proofNotebook.length}ch)`);
+
+    if (pipeline.notebookStatus.includes('needs_research')) {
+      emitStatus('high-research');
+      const researchSkill = this._loadSkill('fermat-research');
+      const researchInput = `${attemptContext}\n\n<research_task>
+The proof notebook says this target needs research. Review only source material already present in the project context, knowledge ledger, bibliography snippets, or full document. Do not invent papers or theorems. If no source-backed fact is available, return open questions and keep the relevant claim under research_before_use.
+</research_task>`;
+      results.research = await this._callLlm(
+        researchInput,
+        onStream,
+        apiKey,
+        model,
+        researchSkill,
+        signal,
+      );
+      pipeline.research = results.research;
+      attemptContext += `\n\n${this._asTaggedBlock('research_review', results.research)}`;
+    }
+
+    const proveSkill = this._loadSkill('fermat-prove');
+    const verifySkill = this._loadSkill('fermat-verify');
+    const attemptPrompts = [
+      {
+        role: 'primary',
+        instruction: 'Write the cleanest complete proof following the proof plan and proof notebook. Prefer proving short obligations inline.',
+      },
+      {
+        role: 'obligation-first',
+        instruction: 'Write an independent proof draft that starts by isolating every nontrivial proof obligation as an internal claim. If an obligation is too large, return a visibly blocked proof.',
+      },
+    ];
+
+    emitStatus('high-drafting', { attempts: attemptPrompts.length });
+    const draftTasks = attemptPrompts.map(async (attempt, index) => {
+      const prompt = `${attemptContext}\n\n<proof_attempt_directive role="${attempt.role}">
+${attempt.instruction}
+Do not cite notebook entries as facts. Use only document-proved/source-backed facts directly; prove candidate obligations inline or mark the proof blocked.
+</proof_attempt_directive>`;
+      const raw = await this._callLlm(prompt, index === 0 ? onStream : null, apiKey, model, proveSkill, signal);
+      return {
+        index,
+        role: attempt.role,
+        raw,
+        proof: this._extractProof(raw),
+      };
+    });
+    pipeline.attempts = await Promise.all(draftTasks);
+
+    if (options.skipVerify) {
+      pipeline.selectedAttempt = pipeline.attempts[0]?.index ?? null;
+      results.proof = pipeline.attempts[0]?.proof || this._blockedProof('High-effort proof pipeline produced no proof attempt.');
+      return results;
+    }
+
+    emitStatus('high-verifying', { attempts: pipeline.attempts.length });
+    for (const attempt of pipeline.attempts) {
+      const verifyInput = `${attemptContext}\n\n<proof_to_verify>\n${attempt.raw}\n</proof_to_verify>`;
+      attempt.verdict = await this._callLlm(verifyInput, null, apiKey, model, verifySkill, signal);
+      attempt.verdictTag = this._extractVerdictTag(attempt.verdict);
+      attempt.correctedProof = this._extractCorrectedProof(attempt.verdict);
+    }
+
+    const passing = pipeline.attempts.find(a => a.verdictTag === 'PASS');
+    if (passing) {
+      emitStatus('high-pass', { attempt: passing.index, role: passing.role });
+      pipeline.selectedAttempt = passing.index;
+      pipeline.finalVerdict = passing.verdict;
+      results.verdict = passing.verdict;
+      results.proof = passing.proof;
+      return results;
+    }
+
+    const corrected = pipeline.attempts.find(a => a.correctedProof);
+    if (corrected) {
+      emitStatus('high-reverify-correction', { attempt: corrected.index, role: corrected.role });
+      const reVerifyInput = `${attemptContext}\n\n<proof_to_verify>\n${corrected.correctedProof}\n</proof_to_verify>`;
+      const reVerdict = await this._callLlm(reVerifyInput, onStream, apiKey, model, verifySkill, signal);
+      const reTag = this._extractVerdictTag(reVerdict);
+      pipeline.finalVerdict = reVerdict;
+      results.verdict = reVerdict;
+      if (reTag === 'PASS' || reTag === 'NEEDS_REVISION') {
+        pipeline.selectedAttempt = corrected.index;
+        results.proof = corrected.correctedProof;
+        return results;
+      }
+    }
+
+    emitStatus('high-repair');
+    const attemptsBlock = this._formatProofAttemptsForPrompt(pipeline.attempts);
+    const repairNotebookInput = `${attemptContext}\n\n<proof_attempts>\n${attemptsBlock}\n</proof_attempts>`;
+    const repairNotebook = await this._callLlm(
+      repairNotebookInput,
+      null,
+      apiKey,
+      model,
+      notebookSkill,
+      signal,
+    );
+    pipeline.repairNotebook = repairNotebook;
+
+    const repairInput = `${repairNotebookInput}\n\n${this._asTaggedBlock('proof_notebook', repairNotebook)}\n\n` +
+      `The previous high-effort proof attempts failed verification. Write one final corrected proof only if the verifier feedback can be repaired under the fact-use policy. If the proof still needs a separate lemma or source-backed fact, return a visibly blocked proof.`;
+    const repairedRaw = await this._callLlm(repairInput, onStream, apiKey, model, proveSkill, signal);
+    const repairedProof = this._extractProof(repairedRaw);
+    const finalVerifyInput = `${repairNotebookInput}\n\n${this._asTaggedBlock('proof_notebook', repairNotebook)}\n\n<proof_to_verify>\n${repairedRaw}\n</proof_to_verify>`;
+    const finalVerdict = await this._callLlm(finalVerifyInput, null, apiKey, model, verifySkill, signal);
+    const finalTag = this._extractVerdictTag(finalVerdict);
+    pipeline.finalVerdict = finalVerdict;
+    pipeline.repairedProof = repairedProof;
+    results.verdict = finalVerdict;
+    if (finalTag === 'PASS' || finalTag === 'NEEDS_REVISION') {
+      pipeline.selectedAttempt = 'repair';
+      results.proof = repairedProof;
+    } else {
+      pipeline.selectedAttempt = null;
+      results.proof = this._blockedProof(this._summarizeFailedProofPipeline(pipeline.attempts, finalVerdict));
+    }
+    return results;
+  }
+
+  async _proveMaxPipeline(workingContext, results, targetNode, options) {
+    const { onStream, onStatus, apiKey, model, signal } = options;
+    const width = this._boundedInt(options.maxProofWidth, 3, 2, 5);
+    const maxStages = this._boundedInt(options.maxProofStages, 3, 1, 6);
+    const long = {
+      mode: 'max-long-range',
+      runId: this._proofRunId(targetNode),
+      width,
+      maxStages,
+      stages: [],
+      attempts: [],
+      selectedAttempt: null,
+      finalVerdict: null,
+    };
+    results.proofPipeline = long;
+    results.maxPipeline = long;
+    const proofRun = createProofRun({
+      runId: long.runId,
+      target: targetNode,
+      config: {
+        effort: 'max',
+        width,
+        maxStages,
+        model: model || null,
+        skipVerify: !!options.skipVerify,
+      },
+    });
+    results.proofRun = proofRun;
+
+    const emitStatus = (phase, extra = {}) => {
+      if (onStatus) onStatus({ phase, ...extra });
+      console.log(`[MaxPipeline] ${phase}`, extra);
+    };
+    const appendRunEvent = (type, payload = {}) => {
+      appendProofRunEvent(proofRun, type, payload);
+      const paths = this._persistProofRunArtifacts(proofRun, targetNode, options);
+      if (paths) {
+        long.eventLogPath = paths.runPath;
+        long.obligationGraphPath = paths.graphPath;
+      }
+    };
+    const initialPaths = this._persistProofRunArtifacts(proofRun, targetNode, options);
+    if (initialPaths) {
+      long.eventLogPath = initialPaths.runPath;
+      long.obligationGraphPath = initialPaths.graphPath;
+    }
+
+    if (results.knowledge) {
+      appendRunEvent('knowledge_review.completed', { text: results.knowledge });
+    }
+    if (results.sketch) {
+      appendRunEvent('plan.completed', { text: results.sketch });
+    }
+
+    const notebookSkill = this._loadSkill('fermat-proof-notebook');
+    const proveSkill = this._loadSkill('fermat-prove');
+    const verifySkill = this._loadSkill('fermat-verify');
+    const researchSkill = this._loadSkill('fermat-research');
+    const proofPlanBlock = results.sketch
+      ? this._asTaggedBlock('proof_plan', results.sketch)
+      : '';
+    const baseInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}`;
+
+    emitStatus('max-notebook', { width, maxStages });
+    let currentNotebook = await this._callLlm(
+      `${baseInput}\n\n<long_range_request effort="max">
+Build the initial long-range proof notebook. Prefer precise obligations, discarded routes, and next actions over a confident but unsupported route.
+</long_range_request>`,
+      onStream,
+      apiKey,
+      model,
+      notebookSkill,
+      signal,
+    );
+    results.proofNotebook = currentNotebook;
+    long.notebook = currentNotebook;
+    appendRunEvent('notebook.updated', {
+      stage: 0,
+      text: currentNotebook,
+      status: this._extractTagText(currentNotebook, 'status') || 'unknown',
+    });
+    this._persistProofRunSnapshot(long, targetNode, options);
+
+    for (let stageIndex = 1; stageIndex <= maxStages; stageIndex++) {
+      const stage = {
+        index: stageIndex,
+        notebook: currentNotebook,
+        notebookStatus: this._extractTagText(currentNotebook, 'status') || 'unknown',
+        attempts: [],
+      };
+      long.stages.push(stage);
+
+      let stageContext = `${baseInput}\n\n${this._asTaggedBlock('proof_notebook', currentNotebook)}`;
+      const preResearchDecision = buildSchedulerDecision(proofRun.obligationGraph, {
+        stage: stageIndex,
+        width,
+      });
+      stage.preResearchDecision = preResearchDecision;
+      if (stage.notebookStatus.includes('needs_research') || preResearchDecision.focus === 'research') {
+        emitStatus('max-research', { stage: stageIndex });
+        stage.research = await this._callLlm(
+          `${stageContext}\n\n<research_task>
+The max-effort notebook or scheduler requests research. Review only source material already present in the project context, knowledge ledger, bibliography snippets, or full document. Do not invent papers or theorems. If the needed source is not present, return open questions and keep the claim under research_before_use.
+</research_task>`,
+          null,
+          apiKey,
+          model,
+          researchSkill,
+          signal,
+        );
+        stageContext += `\n\n${this._asTaggedBlock('research_review', stage.research)}`;
+        long.research = stage.research;
+        results.research = stage.research;
+        appendRunEvent('research.completed', {
+          stage: stageIndex,
+          text: stage.research,
+        });
+      }
+
+      const schedulerDecision = buildSchedulerDecision(proofRun.obligationGraph, {
+        stage: stageIndex,
+        width,
+      });
+      stage.schedulerDecision = schedulerDecision;
+      stageContext += `\n\n${formatSchedulerDecisionForPrompt(schedulerDecision)}`;
+      appendRunEvent('scheduler.decision', {
+        stage: stageIndex,
+        decision: schedulerDecision,
+      });
+
+      const selectedObligationIds = (schedulerDecision.selectedObligations || []).map(item => item.id);
+      const directives = this._maxAttemptDirectives(width, stageIndex, schedulerDecision);
+      emitStatus('max-drafting', { stage: stageIndex, attempts: directives.length });
+      stage.attempts = await Promise.all(directives.map(async (attempt, localIndex) => {
+        const globalIndex = long.attempts.length + localIndex;
+        const prompt = `${stageContext}\n\n<max_attempt_directive stage="${stageIndex}" role="${this._escapeXmlAttr(attempt.role)}">
+${attempt.instruction}
+Do not cite notebook entries as facts. Use only document-proved/source-backed facts directly; prove candidate obligations inline. If a necessary obligation is too large or unsupported, return a visibly blocked proof naming that obligation.
+</max_attempt_directive>`;
+        const raw = await this._callLlm(prompt, globalIndex === 0 ? onStream : null, apiKey, model, proveSkill, signal);
+        return {
+          index: globalIndex,
+          stage: stageIndex,
+          role: attempt.role,
+          raw,
+          proof: this._extractProof(raw),
+          selectedObligationIds,
+        };
+      }));
+      long.attempts.push(...stage.attempts);
+      for (const attempt of stage.attempts) {
+        appendRunEvent('attempt.completed', {
+          stage: stageIndex,
+          index: attempt.index,
+          role: attempt.role,
+          raw: attempt.raw,
+          proof: attempt.proof,
+          selectedObligationIds: attempt.selectedObligationIds,
+        });
+      }
+
+      if (options.skipVerify) {
+        const first = stage.attempts[0];
+        long.selectedAttempt = first?.index ?? null;
+        results.proof = first?.proof || this._blockedProof('Max proof pipeline produced no proof attempt.');
+        appendRunEvent('run.completed', {
+          status: 'skipped_verification',
+          selectedAttempt: long.selectedAttempt,
+        });
+        this._persistProofRunSnapshot(long, targetNode, options);
+        return results;
+      }
+
+      emitStatus('max-verifying', { stage: stageIndex, attempts: stage.attempts.length });
+      for (const attempt of stage.attempts) {
+        const verifyInput = `${stageContext}\n\n<proof_to_verify>\n${attempt.raw}\n</proof_to_verify>`;
+        attempt.verdict = await this._callLlm(verifyInput, null, apiKey, model, verifySkill, signal);
+        attempt.verdictTag = this._extractVerdictTag(attempt.verdict);
+        attempt.correctedProof = this._extractCorrectedProof(attempt.verdict);
+        appendRunEvent('verification.completed', {
+          stage: stageIndex,
+          index: attempt.index,
+          role: attempt.role,
+          verdictTag: attempt.verdictTag,
+          verdict: attempt.verdict,
+          correctedProof: attempt.correctedProof,
+          selectedObligationIds: attempt.selectedObligationIds,
+        });
+      }
+
+      const passing = stage.attempts.find(a => a.verdictTag === 'PASS');
+      if (passing) {
+        emitStatus('max-pass', { stage: stageIndex, attempt: passing.index, role: passing.role });
+        long.selectedAttempt = passing.index;
+        long.finalVerdict = passing.verdict;
+        results.verdict = passing.verdict;
+        results.proof = passing.proof;
+        appendRunEvent('run.completed', {
+          status: 'proved',
+          verdictTag: 'PASS',
+          selectedAttempt: passing.index,
+        });
+        this._persistProofRunSnapshot(long, targetNode, options);
+        return results;
+      }
+
+      const corrected = stage.attempts.find(a => a.correctedProof);
+      if (corrected) {
+        emitStatus('max-reverify-correction', { stage: stageIndex, attempt: corrected.index, role: corrected.role });
+        const reVerifyInput = `${stageContext}\n\n<proof_to_verify>\n${corrected.correctedProof}\n</proof_to_verify>`;
+        const reVerdict = await this._callLlm(reVerifyInput, null, apiKey, model, verifySkill, signal);
+        const reTag = this._extractVerdictTag(reVerdict);
+        corrected.correctedVerdict = reVerdict;
+        corrected.correctedVerdictTag = reTag;
+        long.finalVerdict = reVerdict;
+        results.verdict = reVerdict;
+        appendRunEvent('correction.verified', {
+          stage: stageIndex,
+          index: corrected.index,
+          role: corrected.role,
+          verdictTag: reTag,
+          verdict: reVerdict,
+          correctedProof: corrected.correctedProof,
+          selectedObligationIds: corrected.selectedObligationIds,
+        });
+        if (reTag === 'PASS' || reTag === 'NEEDS_REVISION') {
+          long.selectedAttempt = corrected.index;
+          results.proof = corrected.correctedProof;
+          appendRunEvent('run.completed', {
+            status: reTag === 'PASS' ? 'proved' : 'needs_revision',
+            verdictTag: reTag,
+            selectedAttempt: corrected.index,
+          });
+          this._persistProofRunSnapshot(long, targetNode, options);
+          return results;
+        }
+      }
+
+      emitStatus('max-notebook-update', { stage: stageIndex });
+      const history = this._formatProofAttemptsForPrompt(long.attempts.slice(-Math.max(width * 2, 6)));
+      currentNotebook = await this._callLlm(
+        `${baseInput}\n\n${this._asTaggedBlock('proof_notebook', currentNotebook)}\n\n<proof_attempts>\n${history}\n</proof_attempts>\n\n<long_range_update stage="${stageIndex}">
+All attempts in this stage failed verification. Update the notebook: preserve supported partial results only as obligations unless proved inline, mark failed routes as discarded, and choose the next stage's concrete tasks.
+</long_range_update>`,
+        null,
+        apiKey,
+        model,
+        notebookSkill,
+        signal,
+      );
+      stage.nextNotebook = currentNotebook;
+      long.notebook = currentNotebook;
+      results.proofNotebook = currentNotebook;
+      appendRunEvent('notebook.updated', {
+        stage: stageIndex,
+        text: currentNotebook,
+        status: this._extractTagText(currentNotebook, 'status') || 'unknown',
+      });
+      this._persistProofRunSnapshot(long, targetNode, options);
+    }
+
+    emitStatus('max-blocked', { stages: maxStages, attempts: long.attempts.length });
+    long.selectedAttempt = null;
+    const finalAttempt = [...long.attempts].reverse().find(a => a.verdict);
+    long.finalVerdict = finalAttempt?.verdict || null;
+    results.verdict = long.finalVerdict;
+    results.proof = this._blockedProof(this._summarizeFailedProofPipeline(long.attempts, long.finalVerdict));
+    appendRunEvent('run.blocked', {
+      stages: maxStages,
+      attempts: long.attempts.length,
+      finalVerdict: long.finalVerdict,
+    });
+    this._persistProofRunSnapshot(long, targetNode, options);
+    return results;
+  }
+
   // ── Lean sketch → fill → sorrify pipeline ─────────────────────────────────
 
   /**
@@ -252,8 +780,11 @@ class ClaudeCodeBackend {
     const maxSketchRetries = 2;
     const maxFillRetries = options.maxLeanRetries ?? 3;
 
-    // Build rich Lean 4 system prompt (aware of mathlib availability)
-    const usesMathlib = leanRunner.mathlibReady;
+    // Build rich Lean 4 system prompt (aware of mathlib availability).
+    // Must use effectiveMathlib (user setting AND cache present), NOT just
+    // mathlibReady — otherwise the LLM generates `import Mathlib` but verify()
+    // runs in core-only mode, causing "unknown module prefix 'Mathlib'".
+    const usesMathlib = leanRunner.effectiveMathlib;
     const LEAN_SYS = this._buildLeanSys(usesMathlib);
 
     const emitStatus = (phase, extra = {}) => {
@@ -933,7 +1464,7 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     return new Promise((resolve, reject) => {
       const args = [
         '--print',
-        '--model', model || 'claude-sonnet-4-6',
+        '--model', resolveModelId(model),
       ];
 
       const proc = spawn(this._claudePath, args, {
@@ -1052,6 +1583,137 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     const m2 = text.match(/```\n([\s\S]*?)```/);
     if (m2) return m2[1].trim();
     return text.trim();
+  }
+
+  // ── Max-effort run persistence ───────────────────────────────────────────
+
+  _proofRunId(targetNode) {
+    const label = targetNode?.labels?.[0] || targetNode?.name || targetNode?.id || 'target';
+    const safe = String(label).replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'target';
+    return `${Date.now()}-${safe}`;
+  }
+
+  _persistProofRunSnapshot(run, targetNode, options = {}) {
+    try {
+      const fermatDir = this._resolveFermatDir(options.marker || {});
+      if (!fermatDir) return null;
+      const runsDir = path.join(fermatDir, 'proof-runs');
+      fs.mkdirSync(runsDir, { recursive: true });
+      const runPath = path.join(runsDir, `${run.runId || this._proofRunId(targetNode)}.json`);
+      run.runPath = runPath;
+      const payload = {
+        schemaVersion: 1,
+        updatedAt: new Date().toISOString(),
+        target: {
+          id: targetNode?.id || null,
+          type: targetNode?.type || null,
+          name: targetNode?.name || null,
+          labels: targetNode?.labels || [],
+          lineNumber: targetNode?.lineNumber || null,
+        },
+        run: this._compactProofRun(run),
+      };
+      fs.writeFileSync(runPath, JSON.stringify(payload, null, 2));
+      return runPath;
+    } catch (err) {
+      console.warn(`[MaxPipeline] Failed to persist run snapshot: ${err.message}`);
+      return null;
+    }
+  }
+
+  _persistProofRunArtifacts(proofRun, targetNode, options = {}) {
+    try {
+      const fermatDir = this._resolveFermatDir(options.marker || {});
+      if (!fermatDir) return null;
+      const paths = persistProofRunArtifacts(proofRun, fermatDir);
+      if (paths) {
+        console.log(`[MaxPipeline] Event log: ${paths.runPath}`);
+      }
+      void targetNode;
+      return paths;
+    } catch (err) {
+      console.warn(`[MaxPipeline] Failed to persist proof run event log: ${err.message}`);
+      return null;
+    }
+  }
+
+  _compactProofRun(run) {
+    const compactAttempt = (attempt = {}) => ({
+      index: attempt.index,
+      stage: attempt.stage,
+      role: attempt.role,
+      verdictTag: attempt.verdictTag || this._extractVerdictTag(attempt.verdict),
+      correctedVerdictTag: attempt.correctedVerdictTag || this._extractVerdictTag(attempt.correctedVerdict),
+      selectedObligationIds: attempt.selectedObligationIds || [],
+      proof: this._truncateForPrompt(attempt.proof || '', 2000),
+      verifierFeedback: this._truncateForPrompt(attempt.verdict || '', 2000),
+    });
+    return {
+      mode: run.mode,
+      runId: run.runId,
+      runPath: run.runPath || null,
+      width: run.width,
+      maxStages: run.maxStages,
+      selectedAttempt: run.selectedAttempt,
+      finalVerdictTag: this._extractVerdictTag(run.finalVerdict),
+      notebook: this._truncateForPrompt(run.notebook || '', 5000),
+      attempts: (run.attempts || []).map(compactAttempt),
+      stages: (run.stages || []).map(stage => ({
+        index: stage.index,
+        notebookStatus: stage.notebookStatus,
+        schedulerDecision: stage.schedulerDecision ? {
+          focus: stage.schedulerDecision.focus,
+          graphStatus: stage.schedulerDecision.graphStatus,
+          selectedObligations: (stage.schedulerDecision.selectedObligations || []).map(item => ({
+            id: item.id,
+            statement: this._truncateForPrompt(item.statement || '', 500),
+            tier: item.tier,
+            usePolicy: item.usePolicy,
+            confidence: item.confidence,
+            status: item.status,
+          })),
+          selectedRoutes: (stage.schedulerDecision.selectedRoutes || []).map(item => ({
+            id: item.id,
+            idea: this._truncateForPrompt(item.idea || '', 500),
+            confidence: item.confidence,
+            usePolicy: item.usePolicy,
+          })),
+        } : null,
+        notebook: this._truncateForPrompt(stage.notebook || '', 2500),
+        nextNotebook: this._truncateForPrompt(stage.nextNotebook || '', 2500),
+        research: this._truncateForPrompt(stage.research || '', 2500),
+        attempts: (stage.attempts || []).map(compactAttempt),
+      })),
+    };
+  }
+
+  _resolveFermatDir(marker = {}) {
+    const startDirs = [];
+    if (typeof marker.projectDir === 'string' && marker.projectDir) {
+      startDirs.push(marker.projectDir);
+    }
+    if (typeof marker.filePath === 'string' && marker.filePath) {
+      startDirs.push(path.dirname(marker.filePath));
+    }
+    if (startDirs.length === 0) return null;
+
+    for (const start of startDirs) {
+      let dir = path.resolve(start);
+      for (let depth = 0; depth < 8; depth++) {
+        const fermatDir = path.join(dir, '.fermat');
+        if (fs.existsSync(fermatDir) || fs.existsSync(path.join(dir, '.git'))) {
+          fs.mkdirSync(fermatDir, { recursive: true });
+          return fermatDir;
+        }
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+    }
+
+    const fallback = path.join(path.resolve(startDirs[0]), '.fermat');
+    fs.mkdirSync(fallback, { recursive: true });
+    return fallback;
   }
 
   // ── Project knowledge ledger ─────────────────────────────────────────────
@@ -1186,6 +1848,180 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     if (/\$[^$]*\$/.test(text)) return true;
     if (/\\\\/.test(text)) return true;
     return false;
+  }
+
+  _extractVerdictTag(text) {
+    const body = String(text || '');
+    const match = body.match(/<verdict>\s*(PASS|NEEDS_REVISION|FAIL)\s*<\/verdict>/i) ||
+      body.match(/<verdict>\s*(PASS|NEEDS_REVISION|FAIL)\b/i);
+    return match ? match[1].toUpperCase() : 'UNKNOWN';
+  }
+
+  _extractCorrectedProof(text) {
+    const body = String(text || '');
+    const match = body.match(/<corrected_proof>\s*([\s\S]*?)\s*<\/corrected_proof>/i);
+    if (!match) return '';
+
+    const corrected = match[1].trim();
+    if (!corrected || /^(none|n\/a|not available|no corrected proof)\.?$/i.test(corrected)) {
+      return '';
+    }
+
+    if (/\\begin\{proof\}/.test(corrected) || this._looksLikeProofBody(corrected)) {
+      return this._extractProof(corrected);
+    }
+
+    return '';
+  }
+
+  _formatProofAttemptsForPrompt(attempts = []) {
+    return attempts.map((attempt, i) => {
+      const index = Number.isInteger(attempt.index) ? attempt.index : i;
+      const role = this._escapeXmlAttr(attempt.role || 'attempt');
+      const verdictTag = this._escapeXmlAttr(attempt.verdictTag || this._extractVerdictTag(attempt.verdict));
+      return [
+        `<attempt index="${index}" role="${role}" verdict="${verdictTag}">`,
+        '<proof>',
+        this._truncateForPrompt(attempt.proof || attempt.raw || '', 4500),
+        '</proof>',
+        '<verifier_feedback>',
+        this._truncateForPrompt(attempt.verdict || '', 4500),
+        '</verifier_feedback>',
+        '</attempt>',
+      ].join('\n');
+    }).join('\n\n');
+  }
+
+  _summarizeFailedProofPipeline(attempts = [], finalVerdict = '') {
+    const attemptSummary = attempts.length
+      ? attempts.map((attempt, i) => {
+        const index = Number.isInteger(attempt.index) ? attempt.index : i;
+        const tag = attempt.verdictTag || this._extractVerdictTag(attempt.verdict);
+        return `attempt ${index} (${attempt.role || 'attempt'}): ${tag}`;
+      }).join('; ')
+      : 'no proof attempts were produced';
+
+    const finalIssues = this._extractVerifierIssues(finalVerdict);
+    const issueText = finalIssues.length
+      ? finalIssues.join('\n')
+      : this._truncateForPrompt(finalVerdict || 'No verifier feedback was returned.', 1200);
+
+    return [
+      'Proof effort pipeline did not reach verifier PASS.',
+      `Attempt verdicts: ${attemptSummary}.`,
+      'Blocking verifier feedback:',
+      issueText,
+    ].join('\n');
+  }
+
+  _blockedProof(reason) {
+    const comment = String(reason || 'Proof effort pipeline could not certify this proof.')
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(Boolean)
+      .slice(0, 12)
+      .map(line => `% ${line.replace(/%/g, '\\%')}`)
+      .join('\n');
+
+    return [
+      '\\begin{proof}',
+      '% [FERMAT BLOCKED] This proof was not inserted as a certified argument.',
+      comment || '% Proof effort pipeline could not certify this proof.',
+      '\\end{proof}',
+    ].join('\n');
+  }
+
+  _extractVerifierIssues(verdict) {
+    const body = String(verdict || '');
+    const issuesMatch = body.match(/<issues>\s*([\s\S]*?)\s*<\/issues>/i);
+    if (!issuesMatch) return [];
+    return issuesMatch[1]
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => /^[-*]\s+/.test(line))
+      .slice(0, 8);
+  }
+
+  _extractTagText(text, tagName) {
+    const pattern = new RegExp(`<${tagName}>\\s*([\\s\\S]*?)\\s*</${tagName}>`, 'i');
+    const match = String(text || '').match(pattern);
+    return match ? match[1].trim().toLowerCase() : '';
+  }
+
+  _maxAttemptDirectives(width, stageIndex, schedulerDecision = null) {
+    const lateStage = stageIndex > 1
+      ? 'Use verifier feedback and discarded routes from earlier stages to avoid repeating failed arguments.'
+      : 'Treat this as the first broad search stage.';
+    const schedulerFocus = this._formatSchedulerFocusForPrompt(schedulerDecision);
+    return [
+      {
+        role: 'primary',
+        instruction: `Write the strongest complete proof following the current notebook. ${lateStage}\n${schedulerFocus}`,
+      },
+      {
+        role: 'obligation-first',
+        instruction: `Start with the selected scheduler obligations. Turn every nontrivial dependency into an explicit internal claim, then prove those claims before using them.\n${schedulerFocus}`,
+      },
+      {
+        role: 'adversarial-repair',
+        instruction: `Assume the obvious proof is wrong. Search for hidden cases, circularity, and condition mismatches in the selected obligations and routes, then write only the repaired argument.\n${schedulerFocus}`,
+      },
+      {
+        role: 'alternate-route',
+        instruction: `Try a materially different selected or candidate route from the current primary strategy while respecting all discarded routes and use policies.\n${schedulerFocus}`,
+      },
+      {
+        role: 'sublemma-extractor',
+        instruction: `Focus on the smallest selected obligation or missing sublemma that would make the target proof go through; prove it inline when short, otherwise mark it as a sublemma obligation.\n${schedulerFocus}`,
+      },
+    ].slice(0, width);
+  }
+
+  _formatSchedulerFocusForPrompt(schedulerDecision) {
+    if (!schedulerDecision) {
+      return 'Scheduler focus: unavailable. Follow the current notebook and preserve all use-policy constraints.';
+    }
+    const obligations = (schedulerDecision.selectedObligations || [])
+      .slice(0, 5)
+      .map((item, index) => [
+        `${index + 1}. ${this._truncateForPrompt(item.statement || '', 500)}`,
+        `tier=${item.tier || 'unknown'}`,
+        `use_policy=${item.usePolicy || 'research_before_use'}`,
+        `confidence=${item.confidence || 'medium'}`,
+        item.neededFor ? `needed_for=${this._truncateForPrompt(item.neededFor, 160)}` : '',
+      ].filter(Boolean).join(' | '));
+    const routes = (schedulerDecision.selectedRoutes || [])
+      .slice(0, 3)
+      .map((item, index) => [
+        `${index + 1}. ${this._truncateForPrompt(item.idea || '', 300)}`,
+        `confidence=${item.confidence || 'medium'}`,
+        `use_policy=${item.usePolicy || 'research_before_use'}`,
+      ].join(' | '));
+    return [
+      `Scheduler focus: ${schedulerDecision.focus || 'route_search'}. ${schedulerDecision.rationale || ''}`,
+      obligations.length ? `Selected obligations:\n${obligations.join('\n')}` : 'Selected obligations: none.',
+      routes.length ? `Candidate routes:\n${routes.join('\n')}` : 'Candidate routes: none.',
+    ].join('\n');
+  }
+
+  _boundedInt(value, fallback, min, max) {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.min(max, Math.max(min, n));
+  }
+
+  _truncateForPrompt(text, maxChars) {
+    const body = String(text || '').trim();
+    if (body.length <= maxChars) return body;
+    return `${body.slice(0, maxChars)}\n[FERMAT: truncated ${body.length - maxChars} chars]`;
+  }
+
+  _escapeXmlAttr(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   recordAcceptedProof(label, statementTeX, proofTeX) {

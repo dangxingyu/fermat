@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
+import { countCopilotNotes } from '../utils/outline-audit-browser';
 
 /**
  * Theory Outline sidebar.
@@ -56,7 +57,153 @@ function getProofStatus(node, proofTasks) {
   return 'pending'; // has marker, not yet submitted
 }
 
-function OutlineNode({ node, proofTasks, onClick, depth = 0 }) {
+function AuditStatus({ status, error, onRefresh }) {
+  const label = {
+    waiting: 'queued',
+    loading: 'loading',
+    auditing: 'auditing',
+    ready: 'audited',
+    stale: 'stale',
+    failed: 'failed',
+  }[status] || '';
+
+  if (!label && !onRefresh) return null;
+
+  return (
+    <span className={`outline-audit-status ${status || 'idle'}`} title={error || label}>
+      {label && <span>{label}</span>}
+      {onRefresh && (
+        <button
+          type="button"
+          className="outline-audit-refresh"
+          onClick={(event) => {
+            event.stopPropagation();
+            onRefresh();
+          }}
+          title="Refresh semantic audit"
+          aria-label="Refresh semantic audit"
+        >
+          ↻
+        </button>
+      )}
+    </span>
+  );
+}
+
+function NoteGroup({ title, items, empty, renderItem }) {
+  return (
+    <div className="copilot-note-group">
+      <div className="copilot-note-title">{title}</div>
+      {items.length > 0 ? (
+        <div className="copilot-note-list">
+          {items.map((item, index) => (
+            <div className="copilot-note-item" key={`${title}-${index}`}>
+              {renderItem(item)}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="copilot-note-empty">{empty}</div>
+      )}
+    </div>
+  );
+}
+
+function PolicyTag({ value }) {
+  if (!value) return null;
+  return <span className={`policy-tag ${value}`}>{value}</span>;
+}
+
+function CopilotNotes({ node, citedNodes }) {
+  const copilot = node.copilot || {};
+  const warnings = [...(copilot.warnings || [])];
+  if (copilot.status === 'stale') {
+    warnings.unshift({
+      statement: 'Audit is stale for this statement.',
+      reason: 'The statement hash no longer matches the saved audit entry.',
+    });
+  }
+
+  return (
+    <div className={`copilot-notes ${copilot.status === 'stale' ? 'stale' : ''}`}>
+      <div className="copilot-notes-header">
+        <span>Copilot notes</span>
+        {copilot.status && <span>{copilot.status}</span>}
+      </div>
+      <NoteGroup
+        title="Cited"
+        items={citedNodes}
+        empty="No explicit citations."
+        renderItem={(item) => (
+          <>
+            <span className="note-main">{item.target?.name || item.label}</span>
+            <span className="note-meta">{item.target?.labels?.[0] || item.label}</span>
+          </>
+        )}
+      />
+      <NoteGroup
+        title="Suggested"
+        items={copilot.suggestedDependencies || []}
+        empty="No semantic dependency suggestions."
+        renderItem={(item) => (
+          <>
+            <span className="note-main">{item.statement || item.targetLabel}</span>
+            <span className="note-meta">
+              {item.targetLabel || item.confidence}
+              <PolicyTag value={item.usePolicy} />
+            </span>
+            {item.reason && <span className="note-reason">{item.reason}</span>}
+          </>
+        )}
+      />
+      <NoteGroup
+        title="Obligations"
+        items={copilot.proofObligations || []}
+        empty="No proof obligations recorded."
+        renderItem={(item) => (
+          <>
+            <span className="note-main">{item.statement}</span>
+            <span className="note-meta">
+              {item.confidence}
+              <PolicyTag value={item.usePolicy} />
+            </span>
+            {item.neededFor && <span className="note-reason">{item.neededFor}</span>}
+          </>
+        )}
+      />
+      <NoteGroup
+        title="Warnings"
+        items={[...(copilot.missingCitations || []), ...warnings]}
+        empty="No warnings."
+        renderItem={(item) => (
+          <>
+            <span className="note-main">{item.statement || item.reason}</span>
+            <span className="note-meta">
+              {item.suggestedLabel || item.tier || item.confidence}
+              <PolicyTag value={item.usePolicy} />
+            </span>
+            {item.reason && <span className="note-reason">{item.reason}</span>}
+          </>
+        )}
+      />
+    </div>
+  );
+}
+
+function CopilotBadges({ copilot }) {
+  const counts = countCopilotNotes(copilot);
+  if (!counts.total) return null;
+  return (
+    <span className="copilot-badges" aria-label="Copilot annotations">
+      {counts.suggested > 0 && <span className="copilot-badge suggested">+{counts.suggested}</span>}
+      {counts.missing > 0 && <span className="copilot-badge missing">c{counts.missing}</span>}
+      {counts.obligations > 0 && <span className="copilot-badge obligations">!{counts.obligations}</span>}
+      {counts.warnings > 0 && <span className="copilot-badge warnings">?{counts.warnings}</span>}
+    </span>
+  );
+}
+
+function OutlineNode({ node, proofTasks, onClick, citedNodes, expanded, onToggle, depth = 0 }) {
   const status = getProofStatus(node, proofTasks);
 
   if (node.type === 'section') {
@@ -85,36 +232,54 @@ function OutlineNode({ node, proofTasks, onClick, depth = 0 }) {
   const typeLabel = TYPE_LABELS[node.type] || node.type.toUpperCase().slice(0, 4);
 
   return (
-    <div
-      className="outline-node"
-      style={{ paddingLeft: 14 + depth * 12 }}
-      onClick={() => onClick(node)}
-      title={`Line ${node.lineNumber} — ${node.labels?.join(', ') || 'no label'}`}
-    >
-      <span
-        className="status-mark"
-        data-status={status}
-        title={status}
-        aria-label={status}
+    <div className="outline-node-wrap">
+      <div
+        className={`outline-node ${expanded ? 'expanded' : ''}`}
+        style={{ paddingLeft: 14 + depth * 12 }}
+        onClick={() => {
+          onClick(node);
+          onToggle(node.id);
+        }}
+        title={`Line ${node.lineNumber} — ${node.labels?.join(', ') || 'no label'}`}
       >
-        {STATUS_MARKS[status] || STATUS_MARKS.unproved}
-      </span>
-      <span className={`type-badge ${node.type}`}>
-        {typeLabel}
-      </span>
-      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {node.name || `(${node.type} ${node.lineNumber})`}
-      </span>
-      {node.proveItMarker && (
-        <span className={`difficulty ${node.proveItMarker.difficulty}`}>
-          {node.proveItMarker.difficulty.toLowerCase()}
+        <span
+          className="status-mark"
+          data-status={status}
+          title={status}
+          aria-label={status}
+        >
+          {STATUS_MARKS[status] || STATUS_MARKS.unproved}
         </span>
+        <span className={`type-badge ${node.type}`}>
+          {typeLabel}
+        </span>
+        <span className="outline-node-title">
+          {node.name || `(${node.type} ${node.lineNumber})`}
+        </span>
+        <CopilotBadges copilot={node.copilot} />
+        {node.proveItMarker && (
+          <span className={`effort ${node.proveItMarker.effort}`}>
+            {node.proveItMarker.effort}
+          </span>
+        )}
+      </div>
+      {expanded && (
+        <CopilotNotes node={node} citedNodes={citedNodes} />
       )}
     </div>
   );
 }
 
-export default function TheoryOutline({ outline, proofTasks, onNodeClick, style }) {
+export default function TheoryOutline({
+  outline,
+  proofTasks,
+  auditStatus,
+  auditError,
+  onRefreshAudit,
+  onNodeClick,
+  style,
+}) {
+  const [expandedNodeId, setExpandedNodeId] = useState(null);
   const stats = useMemo(() => {
     if (!outline?.nodes) return { total: 0, proved: 0, pending: 0, proving: 0 };
     const theoremNodes = outline.nodes.filter(n => n.type !== 'section');
@@ -126,12 +291,27 @@ export default function TheoryOutline({ outline, proofTasks, onNodeClick, style 
     };
   }, [outline]);
 
+  const citedByNode = useMemo(() => {
+    const map = new Map();
+    for (const edge of outline?.edges || []) {
+      const from = outline.nodes.find(n => n.id === edge.from);
+      const target = outline.nodes.find(n => n.id === edge.to);
+      if (!from) continue;
+      if (!map.has(from.id)) map.set(from.id, []);
+      map.get(from.id).push({ label: edge.label, target });
+    }
+    return map;
+  }, [outline]);
+
   return (
     <div className="sidebar" style={style}>
       <div className="sidebar-header">
         <span>Theorems &amp; lemmas</span>
-        <span>
-          {stats.proved} / {stats.total} <span style={{ color: 'var(--verdigris)', marginLeft: 2 }}>{'\u220E'}</span>
+        <span className="sidebar-header-right">
+          <AuditStatus status={auditStatus} error={auditError} onRefresh={onRefreshAudit} />
+          <span>
+            {stats.proved} / {stats.total} <span style={{ color: 'var(--verdigris)', marginLeft: 2 }}>{'\u220E'}</span>
+          </span>
         </span>
       </div>
       <div className="sidebar-content">
@@ -141,6 +321,9 @@ export default function TheoryOutline({ outline, proofTasks, onNodeClick, style 
               key={node.id}
               node={node}
               proofTasks={proofTasks}
+              citedNodes={citedByNode.get(node.id) || []}
+              expanded={expandedNodeId === node.id}
+              onToggle={(nodeId) => setExpandedNodeId(prev => (prev === nodeId ? null : nodeId))}
               onClick={onNodeClick}
             />
           ))
@@ -171,41 +354,6 @@ export default function TheoryOutline({ outline, proofTasks, onNodeClick, style 
               with <code style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }}>\begin&#123;theorem&#125;</code>
               &nbsp;environments.
             </span>
-          </div>
-        )}
-
-        {outline?.edges?.length > 0 && (
-          <div style={{
-            padding: '14px 16px 8px 26px',
-            borderTop: '1px solid var(--border-soft)',
-            marginTop: 12,
-          }}>
-            <div style={{
-              fontFamily: 'var(--font-display)',
-              fontStyle: 'italic',
-              fontSize: 11.5,
-              color: 'var(--text-muted)',
-              marginBottom: 8,
-            }}>
-              Cited within — {outline.edges.length}
-            </div>
-            {outline.edges.map((edge, i) => {
-              const from = outline.nodes.find(n => n.id === edge.from);
-              const to = outline.nodes.find(n => n.id === edge.to);
-              return (
-                <div key={i} style={{
-                  fontSize: 11,
-                  color: 'var(--text-secondary)',
-                  padding: '3px 0',
-                  lineHeight: 1.5,
-                  fontFamily: 'var(--font-mono)',
-                }}>
-                  {from?.name || from?.type}
-                  <span style={{ color: 'var(--accent-soft)', margin: '0 6px' }}>→</span>
-                  {to?.name || to?.type}
-                </div>
-              );
-            })}
           </div>
         )}
       </div>

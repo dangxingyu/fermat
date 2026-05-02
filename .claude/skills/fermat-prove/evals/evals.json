@@ -3,7 +3,7 @@
   "evals": [
     {
       "id": 1,
-      "prompt": "Prove the Infinitude of Primes theorem (Easy difficulty). The theorem states: There are infinitely many prime numbers.",
+      "prompt": "Prove the Infinitude of Primes theorem at low effort. The theorem states: There are infinitely many prime numbers.",
       "expected_output": "A concise proof using Euclid's classic argument (contradiction), 3-8 lines, in \\begin{proof}...\\end{proof} format",
       "files": [],
       "expectations": [
@@ -16,7 +16,7 @@
     },
     {
       "id": 2,
-      "prompt": "Prove the Fundamental Theorem of Arithmetic (Hard difficulty). The theorem states: Every integer n > 1 can be written uniquely as a product of prime numbers. Dependencies: Division Lemma, Definition of Prime.",
+      "prompt": "Prove the Fundamental Theorem of Arithmetic at max effort. The theorem states: Every integer n > 1 can be written uniquely as a product of prime numbers. Dependencies: Division Lemma, Definition of Prime.",
       "expected_output": "A thorough proof covering both existence (by strong induction) and uniqueness (using Euclid's lemma), 20+ lines, referencing \\ref{lem:division} and \\ref{def:prime}",
       "files": [],
       "expectations": [
@@ -55,14 +55,14 @@
     },
     {
       "id": 5,
-      "prompt": "Sketch a proof strategy for FTA (Hard difficulty)",
-      "expected_output": "A structured sketch identifying strong induction for existence, Euclid's lemma as a prerequisite for uniqueness, and estimating the proof as long/complex",
+      "prompt": "Build a proof plan for FTA at max effort",
+      "expected_output": "A structured proof plan identifying strong induction for existence, Euclid's lemma as a prerequisite for uniqueness, and the main proof obligations",
       "files": [],
       "expectations": [
+        "Output contains <proof_plan> section",
+        "Output contains <available_facts> section",
+        "Output contains <proof_obligations> section",
         "Output contains <strategy> section",
-        "Output contains <prerequisites> section",
-        "Output contains <key_steps> section",
-        "Output contains <complexity> section",
         "Strategy mentions induction",
         "Prerequisites identify that Euclid's lemma is needed"
       ]

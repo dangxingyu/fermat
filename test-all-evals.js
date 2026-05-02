@@ -47,7 +47,7 @@ for any $i$, a contradiction.
 For any integers $a$ and $b > 0$, there exist unique integers $q$ and $r$
 such that $a = bq + r$ and $0 \\leq r < b$.
 \\end{lemma}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 \\section{Main Results}
 \\begin{theorem}[Fundamental Theorem of Arithmetic]
 \\label{thm:fta}
@@ -55,15 +55,15 @@ Every integer $n > 1$ can be written uniquely as a product of prime numbers,
 up to the order of factors. This relies on Lemma~\\ref{lem:division}
 and the definition of primes (Definition~\\ref{def:prime}).
 \\end{theorem}
-% [PROVE IT: Hard]
+% [PROVE IT: max]
 \\begin{corollary}
 \\label{cor:sqrt2}
 $\\sqrt{2}$ is irrational. This follows from Theorem~\\ref{thm:fta}.
 \\end{corollary}
-% [PROVE IT: Medium]
+% [PROVE IT: medium]
 \\end{document}`;
 
-const GOOD_PROOF = fs.readFileSync('test-outputs/prove-hard-fta.tex', 'utf-8');
+const GOOD_PROOF = fs.readFileSync('test-outputs/prove-max-fta.tex', 'utf-8');
 const BAD_PROOF = `\\begin{proof}
 We prove by induction on $n$.
 \\textbf{Base case:} $n = 2$ is prime, so it is its own prime factorization.
@@ -105,6 +105,7 @@ const WS = path.join(__dirname, 'fermat-skills-workspace/iteration-1');
 
 async function runAndSave(evalDir, variant, system, user) {
   const dir = path.join(WS, evalDir, variant, 'outputs');
+  fs.mkdirSync(dir, { recursive: true });
   console.log(`  Running ${evalDir}/${variant}...`);
   const { text, tokens, duration } = await callClaude(system, user);
   fs.writeFileSync(path.join(dir, 'result.txt'), text);
@@ -124,22 +125,22 @@ async function main() {
 
   // ── Sketch (with_skill) ──
   console.log('=== Sketch FTA (with_skill) ===');
-  await runAndSave('sketch-hard-fta', 'with_skill', sketchSkill, ctxFTA);
+  await runAndSave('sketch-max-fta', 'with_skill', sketchSkill, ctxFTA);
 
   // ── Baselines (without_skill) ──
   const baselineSystem = 'You are an expert mathematician writing LaTeX proofs. Be rigorous and precise.';
 
   console.log('\n=== Baselines (without_skill) ===');
 
-  // 1. Prove Easy baseline
-  console.log('--- Prove Easy baseline ---');
-  await runAndSave('prove-easy-inf-primes', 'without_skill', baselineSystem,
-    `Prove the following theorem in LaTeX. Output only \\begin{proof}...\\end{proof}.\n\nTheorem (Infinitude of Primes): There are infinitely many prime numbers.\n\nDifficulty: Easy. Be concise.`);
+  // 1. Prove low-effort baseline
+  console.log('--- Prove low-effort baseline ---');
+  await runAndSave('prove-low-inf-primes', 'without_skill', baselineSystem,
+    `Prove the following theorem in LaTeX. Output only \\begin{proof}...\\end{proof}.\n\nTheorem (Infinitude of Primes): There are infinitely many prime numbers.\n\nEffort: low. Be concise.`);
 
-  // 2. Prove Hard baseline
-  console.log('--- Prove Hard baseline ---');
-  await runAndSave('prove-hard-fta', 'without_skill', baselineSystem,
-    `Prove the following theorem in LaTeX. Output only \\begin{proof}...\\end{proof}.\n\nTheorem (Fundamental Theorem of Arithmetic): Every integer n > 1 can be written uniquely as a product of prime numbers, up to the order of factors.\n\nYou may use: Division Lemma (for integers a, b>0 there exist unique q,r with a=bq+r, 0<=r<b) and the definition of prime numbers.\n\nDifficulty: Hard. Be thorough.`);
+  // 2. Prove max-effort baseline
+  console.log('--- Prove max-effort baseline ---');
+  await runAndSave('prove-max-fta', 'without_skill', baselineSystem,
+    `Prove the following theorem in LaTeX. Output only \\begin{proof}...\\end{proof}.\n\nTheorem (Fundamental Theorem of Arithmetic): Every integer n > 1 can be written uniquely as a product of prime numbers, up to the order of factors.\n\nYou may use: Division Lemma (for integers a, b>0 there exist unique q,r with a=bq+r, 0<=r<b) and the definition of prime numbers.\n\nEffort: max. Be thorough.`);
 
   // 3. Verify good proof baseline
   console.log('--- Verify good proof baseline ---');
@@ -153,7 +154,7 @@ async function main() {
 
   // 5. Sketch baseline
   console.log('--- Sketch baseline ---');
-  await runAndSave('sketch-hard-fta', 'without_skill', baselineSystem,
+  await runAndSave('sketch-max-fta', 'without_skill', baselineSystem,
     `Before writing a proof, outline a proof strategy for the Fundamental Theorem of Arithmetic: Every integer n > 1 can be written uniquely as a product of primes.\n\nIdentify the approach, prerequisites, key steps, and potential difficulties.\n\nAvailable tools: Division Lemma, definition of prime numbers.`);
 
   console.log('\n=== All evals complete ===');

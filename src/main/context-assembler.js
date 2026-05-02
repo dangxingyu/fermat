@@ -116,7 +116,7 @@ class ContextAssembler {
         name: targetNode.name,
         labels: targetNode.labels,
         statementTeX: targetNode.statementTeX,
-        difficulty: targetNode.proveItMarker?.difficulty || 'Medium',
+        effort: targetNode.proveItMarker?.effort || 'medium',
         lineNumber: targetNode.lineNumber,
         userSketch: targetNode.userSketch || null,
       },
@@ -161,7 +161,7 @@ class ContextAssembler {
     sections.push(`<theory_map>\n${ctx.theoryMap}\n</theory_map>`);
 
     // Target
-    sections.push(`<target difficulty="${ctx.target.difficulty}">
+    sections.push(`<target effort="${ctx.target.effort}">
 Type: ${ctx.target.type}
 Name: ${ctx.target.name || '(unnamed)'}
 Labels: ${ctx.target.labels?.join(', ') || '(none)'}
