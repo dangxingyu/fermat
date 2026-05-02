@@ -48,6 +48,9 @@ Check all of the following:
      is document-proved or source-backed with matching conditions;
    - `proof_obligations` must be proved inline or rejected as blocked;
    - `discarded_routes` and `do_not_use` entries are forbidden.
+8. A proof containing `[FERMAT BLOCKED]` is not a completed proof. It may be a
+   useful research note or blocked certificate, but it must never receive
+   `PASS`. Return `NEEDS_REVISION` or `FAIL` and name the unresolved obligation.
 
 Unsupported uses of `T2_ALMOST_SURE` or `T3_LIKELY_PROVABLE` are failures unless the proof proves them inline. Any use of `T4_SPECULATIVE`, `N1_LIKELY_FALSE`, `X_REFUTED`, or `do_not_use` is a critical failure.
 
@@ -72,7 +75,7 @@ For each fact, classify it:
 
 ## Verdict Policy
 
-- `PASS`: proof is logically sound and every nontrivial fact is licensed or proved inline.
+- `PASS`: proof is logically sound, every nontrivial fact is licensed or proved inline, and the proof is not marked `[FERMAT BLOCKED]`.
 - `NEEDS_REVISION`: proof is basically right but has minor LaTeX/style/citation issues, or a small gap that is easy to patch.
 - `FAIL`: proof has a logical gap, missing case, unsupported major fact, circular dependency, condition mismatch, or forbidden fact use.
 

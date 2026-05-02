@@ -302,11 +302,14 @@ class ClaudeCodeBackend {
       const verifyInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
       const tv0 = Date.now();
       results.verdict = await this._callLlm(verifyInput, onStream, apiKey, model, verifySkill, signal);
-      const verdictTag = results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown';
-      console.log(`[Prove] Verdict: ${verdictTag} (${Date.now() - tv0}ms)`);
+      const rawVerdictTag = this._extractVerdictTag(results.verdict);
+      results.verdictTag = this._normalizeVerdictForProof(rawVerdictTag, proofOutput);
+      if (results.verdictTag !== rawVerdictTag) {
+        results.verdict += '\n\n<fermat_guardrail>Verifier PASS was downgraded because the proof is explicitly marked [FERMAT BLOCKED].</fermat_guardrail>';
+      }
+      console.log(`[Prove] Verdict: ${results.verdictTag} (${Date.now() - tv0}ms)`);
 
-      const needsRetry = results.verdict &&
-        (results.verdict.includes('<verdict>FAIL') || results.verdict.includes('<verdict>NEEDS_REVISION'));
+      const needsRetry = results.verdictTag === 'FAIL' || results.verdictTag === 'NEEDS_REVISION';
       if (needsRetry) {
         console.log('[Prove] Verification failed — retrying with feedback');
         const retryInput =
@@ -317,7 +320,8 @@ class ClaudeCodeBackend {
 
         const reVerifyInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n<proof_to_verify>\n${proofOutput}\n</proof_to_verify>`;
         results.verdict = await this._callLlm(reVerifyInput, onStream, apiKey, model, verifySkill, signal);
-        console.log(`[Prove] Re-verify verdict: ${results.verdict.match(/<verdict>(\w+)/)?.[1] || 'unknown'}`);
+        results.verdictTag = this._normalizeVerdictForProof(this._extractVerdictTag(results.verdict), proofOutput);
+        console.log(`[Prove] Re-verify verdict: ${results.verdictTag}`);
       }
     } else {
       console.log('[Prove] Verification skipped');
@@ -419,7 +423,7 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
     for (const attempt of pipeline.attempts) {
       const verifyInput = `${attemptContext}\n\n<proof_to_verify>\n${attempt.raw}\n</proof_to_verify>`;
       attempt.verdict = await this._callLlm(verifyInput, null, apiKey, model, verifySkill, signal);
-      attempt.verdictTag = this._extractVerdictTag(attempt.verdict);
+      attempt.verdictTag = this._normalizeVerdictForProof(this._extractVerdictTag(attempt.verdict), attempt.proof);
       attempt.correctedProof = this._extractCorrectedProof(attempt.verdict);
     }
 
@@ -438,7 +442,7 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
       emitStatus('high-reverify-correction', { attempt: corrected.index, role: corrected.role });
       const reVerifyInput = `${attemptContext}\n\n<proof_to_verify>\n${corrected.correctedProof}\n</proof_to_verify>`;
       const reVerdict = await this._callLlm(reVerifyInput, onStream, apiKey, model, verifySkill, signal);
-      const reTag = this._extractVerdictTag(reVerdict);
+      const reTag = this._normalizeVerdictForProof(this._extractVerdictTag(reVerdict), corrected.correctedProof);
       pipeline.finalVerdict = reVerdict;
       results.verdict = reVerdict;
       if (reTag === 'PASS' || reTag === 'NEEDS_REVISION') {
@@ -467,7 +471,7 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
     const repairedProof = this._extractProof(repairedRaw);
     const finalVerifyInput = `${repairNotebookInput}\n\n${this._asTaggedBlock('proof_notebook', repairNotebook)}\n\n<proof_to_verify>\n${repairedRaw}\n</proof_to_verify>`;
     const finalVerdict = await this._callLlm(finalVerifyInput, null, apiKey, model, verifySkill, signal);
-    const finalTag = this._extractVerdictTag(finalVerdict);
+    const finalTag = this._normalizeVerdictForProof(this._extractVerdictTag(finalVerdict), repairedProof);
     pipeline.finalVerdict = finalVerdict;
     pipeline.repairedProof = repairedProof;
     results.verdict = finalVerdict;
@@ -658,7 +662,7 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
       for (const attempt of stage.attempts) {
         const verifyInput = `${stageContext}\n\n<proof_to_verify>\n${attempt.raw}\n</proof_to_verify>`;
         attempt.verdict = await this._callLlm(verifyInput, null, apiKey, model, verifySkill, signal);
-        attempt.verdictTag = this._extractVerdictTag(attempt.verdict);
+        attempt.verdictTag = this._normalizeVerdictForProof(this._extractVerdictTag(attempt.verdict), attempt.proof);
         attempt.correctedProof = this._extractCorrectedProof(attempt.verdict);
         appendRunEvent('verification.completed', {
           stage: stageIndex,
@@ -692,7 +696,7 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
         emitStatus('max-reverify-correction', { stage: stageIndex, attempt: corrected.index, role: corrected.role });
         const reVerifyInput = `${stageContext}\n\n<proof_to_verify>\n${corrected.correctedProof}\n</proof_to_verify>`;
         const reVerdict = await this._callLlm(reVerifyInput, null, apiKey, model, verifySkill, signal);
-        const reTag = this._extractVerdictTag(reVerdict);
+        const reTag = this._normalizeVerdictForProof(this._extractVerdictTag(reVerdict), corrected.correctedProof);
         corrected.correctedVerdict = reVerdict;
         corrected.correctedVerdictTag = reTag;
         long.finalVerdict = reVerdict;
@@ -706,11 +710,11 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
           correctedProof: corrected.correctedProof,
           selectedObligationIds: corrected.selectedObligationIds,
         });
-        if (reTag === 'PASS' || reTag === 'NEEDS_REVISION') {
+        if (reTag === 'PASS') {
           long.selectedAttempt = corrected.index;
           results.proof = corrected.correctedProof;
           appendRunEvent('run.completed', {
-            status: reTag === 'PASS' ? 'proved' : 'needs_revision',
+            status: 'proved',
             verdictTag: reTag,
             selectedAttempt: corrected.index,
           });
@@ -1929,6 +1933,18 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       comment || '% Proof effort pipeline could not certify this proof.',
       '\\end{proof}',
     ].join('\n');
+  }
+
+  _isBlockedProof(proof) {
+    return /\[FERMAT BLOCKED(?:\]|:|\s)/i.test(String(proof || ''));
+  }
+
+  _normalizeVerdictForProof(verdictTag, proof) {
+    const tag = this._extractVerdictTag(`<verdict>${verdictTag || ''}</verdict>`);
+    if (tag === 'PASS' && this._isBlockedProof(proof)) {
+      return 'NEEDS_REVISION';
+    }
+    return tag;
   }
 
   _extractVerifierIssues(verdict) {

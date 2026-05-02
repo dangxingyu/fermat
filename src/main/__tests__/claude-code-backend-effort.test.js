@@ -95,6 +95,9 @@ describe('ClaudeCodeBackend effort proof helpers', () => {
     expect(blocked).toContain('[FERMAT BLOCKED]');
     expect(blocked).toContain('Unsupported concentration bound');
     expect(blocked).toContain('\\end{proof}');
+    expect(backend._isBlockedProof(blocked)).toBe(true);
+    expect(backend._normalizeVerdictForProof('PASS', blocked)).toBe('NEEDS_REVISION');
+    expect(backend._normalizeVerdictForProof('PASS', '\\begin{proof}Valid.\\end{proof}')).toBe('PASS');
   });
 
   it('persists compact max-effort run snapshots beside the project', () => {
