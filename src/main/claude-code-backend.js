@@ -20,6 +20,19 @@ const {
   formatSchedulerDecisionForPrompt,
   persistProofRunArtifacts,
 } = require('./proof-run');
+const { formatEvidencePolicyForPrompt, collectVerifiedPartialResults } = require('./evidence-policy');
+const { KnowledgeStore, extractLedgerProposalsFromResearch } = require('./knowledge-store');
+const {
+  DEFAULT_PROVIDERS,
+  normalizeSearchPlan,
+  persistResearchRun,
+  runNativeSourceSearch,
+} = require('./native-research');
+const {
+  SourceStore,
+  formatSourceCardsForPrompt,
+  normalizeSourceCard,
+} = require('./source-store');
 
 /**
  * Classify an API/network error into a structured { code, userMessage } pair
@@ -62,6 +75,24 @@ function classifyAndAnnotateError(err) {
 function normalizeProofEffort(value) {
   const key = String(value || '').trim().toLowerCase();
   return ['low', 'medium', 'high', 'max'].includes(key) ? key : 'medium';
+}
+
+function mergeCardsById(a = [], b = []) {
+  const byId = new Map();
+  for (const card of [...(a || []), ...(b || [])]) {
+    if (!card?.id) continue;
+    byId.set(card.id, { ...(byId.get(card.id) || {}), ...card });
+  }
+  return [...byId.values()];
+}
+
+function mergePartialsById(a = [], b = []) {
+  const byId = new Map();
+  for (const item of [...(a || []), ...(b || [])]) {
+    if (!item?.id) continue;
+    byId.set(item.id, { ...(byId.get(item.id) || {}), ...item });
+  }
+  return [...byId.values()];
 }
 
 /**
@@ -489,13 +520,22 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
     const { onStream, onStatus, apiKey, model, signal } = options;
     const width = this._boundedInt(options.maxProofWidth, 3, 2, 5);
     const maxStages = this._boundedInt(options.maxProofStages, 3, 1, 6);
+    const sourceSearchEnabled = this._sourceSearchEnabled(options);
+    const sourceSearchProviders = this._sourceSearchProviders(options);
+    const sourceSearchBudget = this._sourceSearchBudget(options);
     const long = {
       mode: 'max-long-range',
       runId: this._proofRunId(targetNode),
       width,
       maxStages,
+      sourceSearchEnabled,
+      sourceSearchProviders,
+      sourceSearchBudget,
       stages: [],
       attempts: [],
+      partialResults: [],
+      sourceCards: [],
+      ledgerProposals: [],
       selectedAttempt: null,
       finalVerdict: null,
     };
@@ -510,6 +550,9 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
         maxStages,
         model: model || null,
         skipVerify: !!options.skipVerify,
+        sourceSearchEnabled,
+        sourceSearchProviders,
+        sourceSearchBudget,
       },
     });
     results.proofRun = proofRun;
@@ -546,7 +589,9 @@ Do not cite notebook entries as facts. Use only document-proved/source-backed fa
     const proofPlanBlock = results.sketch
       ? this._asTaggedBlock('proof_plan', results.sketch)
       : '';
-    const baseInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}`;
+    let nativeSourceCards = this._loadSourceCards(options.marker || {}).slice(0, sourceSearchBudget.maxSources);
+    let nativeContext = this._nativeResearchContext(nativeSourceCards, proofRun);
+    const baseInput = `${workingContext}${proofPlanBlock ? `\n\n${proofPlanBlock}` : ''}\n\n${nativeContext}`;
 
     emitStatus('max-notebook', { width, maxStages });
     let currentNotebook = await this._callLlm(
@@ -568,6 +613,7 @@ Build the initial long-range proof notebook. Prefer precise obligations, discard
     });
     this._persistProofRunSnapshot(long, targetNode, options);
 
+    let hasNativeSearchRun = false;
     for (let stageIndex = 1; stageIndex <= maxStages; stageIndex++) {
       const stage = {
         index: stageIndex,
@@ -583,25 +629,66 @@ Build the initial long-range proof notebook. Prefer precise obligations, discard
         width,
       });
       stage.preResearchDecision = preResearchDecision;
-      if (stage.notebookStatus.includes('needs_research') || preResearchDecision.focus === 'research') {
-        emitStatus('max-research', { stage: stageIndex });
-        stage.research = await this._callLlm(
-          `${stageContext}\n\n<research_task>
+      const needsResearch = stage.notebookStatus.includes('needs_research') || preResearchDecision.focus === 'research';
+      const shouldRunNativeResearch = sourceSearchEnabled && (!hasNativeSearchRun || needsResearch);
+      if (shouldRunNativeResearch || needsResearch) {
+        if (shouldRunNativeResearch) {
+          stage.nativeResearch = await this._runNativeResearchStage({
+            stageIndex,
+            stageContext,
+            targetNode,
+            schedulerDecision: preResearchDecision,
+            currentNotebook,
+            options,
+            apiKey,
+            model,
+            signal,
+            emitStatus,
+            appendRunEvent,
+          });
+          hasNativeSearchRun = true;
+          stage.research = stage.nativeResearch.research || '';
+          long.research = stage.research;
+          results.research = stage.research;
+          nativeSourceCards = mergeCardsById(nativeSourceCards, stage.nativeResearch.sourceCards || [])
+            .slice(0, sourceSearchBudget.maxSources);
+          long.sourceCards = nativeSourceCards.map(card => ({
+            id: card.id,
+            sourceType: card.sourceType,
+            title: card.title,
+            url: card.url,
+            reviewStatus: card.reviewStatus,
+            extractedClaimCount: card.extractedClaims?.length || 0,
+          }));
+          long.ledgerProposals = [
+            ...(long.ledgerProposals || []),
+            ...(stage.nativeResearch.ledgerProposals || []),
+          ];
+          nativeContext = this._nativeResearchContext(nativeSourceCards, proofRun);
+          stageContext += `\n\n${nativeContext}`;
+          if (stage.research) {
+            stageContext += `\n\n${this._asTaggedBlock('research_review', stage.research)}`;
+          }
+        } else {
+          emitStatus('max-research', { stage: stageIndex });
+          stage.research = await this._callLlm(
+            `${stageContext}\n\n<research_task>
 The max-effort notebook or scheduler requests research. Review only source material already present in the project context, knowledge ledger, bibliography snippets, or full document. Do not invent papers or theorems. If the needed source is not present, return open questions and keep the claim under research_before_use.
 </research_task>`,
-          null,
-          apiKey,
-          model,
-          researchSkill,
-          signal,
-        );
-        stageContext += `\n\n${this._asTaggedBlock('research_review', stage.research)}`;
-        long.research = stage.research;
-        results.research = stage.research;
-        appendRunEvent('research.completed', {
-          stage: stageIndex,
-          text: stage.research,
-        });
+            null,
+            apiKey,
+            model,
+            researchSkill,
+            signal,
+          );
+          stageContext += `\n\n${this._asTaggedBlock('research_review', stage.research)}`;
+          long.research = stage.research;
+          results.research = stage.research;
+          appendRunEvent('research.completed', {
+            stage: stageIndex,
+            text: stage.research,
+          });
+        }
       }
 
       const schedulerDecision = buildSchedulerDecision(proofRun.obligationGraph, {
@@ -614,6 +701,32 @@ The max-effort notebook or scheduler requests research. Review only source mater
         stage: stageIndex,
         decision: schedulerDecision,
       });
+
+      if (!options.skipVerify) {
+        stage.partialResults = await this._proveSelectedSubgoals({
+          stageIndex,
+          stageContext,
+          schedulerDecision,
+          proveSkill,
+          verifySkill,
+          apiKey,
+          model,
+          signal,
+          appendRunEvent,
+          emitStatus,
+        });
+        if (stage.partialResults.length > 0) {
+          long.partialResults.push(...stage.partialResults.map(item => ({
+            id: item.id,
+            stage: item.stage,
+            obligationId: item.obligationId,
+            statement: item.statement,
+            source: item.source,
+          })));
+          nativeContext = this._nativeResearchContext(nativeSourceCards, proofRun);
+          stageContext += `\n\n${this._formatPartialResultsForPrompt(stage.partialResults)}\n\n${nativeContext}`;
+        }
+      }
 
       const selectedObligationIds = (schedulerDecision.selectedObligations || []).map(item => item.id);
       const directives = this._maxAttemptDirectives(width, stageIndex, schedulerDecision);
@@ -746,16 +859,26 @@ All attempts in this stage failed verification. Update the notebook: preserve su
       this._persistProofRunSnapshot(long, targetNode, options);
     }
 
-    emitStatus('max-blocked', { stages: maxStages, attempts: long.attempts.length });
+    const verifiedPartials = collectVerifiedPartialResults(proofRun.obligationGraph);
+    const finalStatus = verifiedPartials.length > 0 ? 'partial_progress' : 'blocked_with_frontier';
+    emitStatus(finalStatus === 'partial_progress' ? 'max-partial-progress' : 'max-blocked', {
+      stages: maxStages,
+      attempts: long.attempts.length,
+      partialResults: verifiedPartials.length,
+    });
     long.selectedAttempt = null;
+    long.finalStatus = finalStatus;
+    long.partialResults = mergePartialsById(long.partialResults, verifiedPartials);
     const finalAttempt = [...long.attempts].reverse().find(a => a.verdict);
     long.finalVerdict = finalAttempt?.verdict || null;
     results.verdict = long.finalVerdict;
     results.proof = this._blockedProof(this._summarizeFailedProofPipeline(long.attempts, long.finalVerdict));
-    appendRunEvent('run.blocked', {
+    appendRunEvent(finalStatus === 'partial_progress' ? 'run.completed' : 'run.blocked', {
+      status: finalStatus,
       stages: maxStages,
       attempts: long.attempts.length,
       finalVerdict: long.finalVerdict,
+      partialResults: verifiedPartials,
     });
     this._persistProofRunSnapshot(long, targetNode, options);
     return results;
@@ -1641,6 +1764,303 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     }
   }
 
+  _sourceSearchEnabled(options = {}) {
+    if (options.enableSourceSearch === false) return false;
+    if (options.nativeResearch === false) return false;
+    return true;
+  }
+
+  _sourceSearchProviders(options = {}) {
+    const raw = options.sourceSearchProviders || options.searchProviders || DEFAULT_PROVIDERS;
+    if (Array.isArray(raw)) return raw;
+    return String(raw || '').split(',').map(item => item.trim()).filter(Boolean);
+  }
+
+  _sourceSearchBudget(options = {}) {
+    return {
+      maxResultsPerQuery: this._boundedInt(options.maxResultsPerQuery || options.maxSearchResults, 3, 1, 8),
+      maxSources: this._boundedInt(options.maxSources || options.maxSourceCards, 6, 1, 20),
+    };
+  }
+
+  _loadSourceCards(marker = {}) {
+    try {
+      const fermatDir = this._resolveFermatDir(marker);
+      if (!fermatDir) return [];
+      return new SourceStore(fermatDir).listCards();
+    } catch (err) {
+      console.warn(`[SourceStore] Failed to load source cards: ${err.message}`);
+      return [];
+    }
+  }
+
+  _nativeResearchContext(sourceCards = [], proofRun = null) {
+    const partialResults = proofRun ? collectVerifiedPartialResults(proofRun.obligationGraph) : [];
+    return [
+      formatSourceCardsForPrompt(sourceCards),
+      formatEvidencePolicyForPrompt({ sourceCards, partialResults }),
+    ].join('\n\n');
+  }
+
+  _parseStrictJson(raw, label) {
+    try {
+      return extractJsonObject(raw);
+    } catch (err) {
+      throw new Error(`${label} did not return valid JSON: ${err.message}`);
+    }
+  }
+
+  async _runNativeResearchStage({
+    stageIndex,
+    stageContext,
+    targetNode,
+    schedulerDecision,
+    currentNotebook,
+    options,
+    apiKey,
+    model,
+    signal,
+    emitStatus,
+    appendRunEvent,
+  }) {
+    const fermatDir = this._resolveFermatDir(options.marker || {});
+    if (!fermatDir) {
+      return { sourceCards: [], research: '', searchRun: null, searchRunPath: null, ledgerProposals: [] };
+    }
+
+    const sourceStore = new SourceStore(fermatDir);
+    const knowledgeStore = new KnowledgeStore(fermatDir);
+    const sourceSearchSkill = this._loadSkill('fermat-source-search-plan');
+    const readPaperSkill = this._loadSkill('fermat-read-paper');
+    const researchSkill = this._loadSkill('fermat-research');
+    const providers = this._sourceSearchProviders(options);
+    const budget = this._sourceSearchBudget(options);
+
+    emitStatus('max-source-search-plan', { stage: stageIndex, providers, budget });
+    const planRaw = await this._callLlm(
+      `${stageContext}\n\n${formatSchedulerDecisionForPrompt(schedulerDecision)}\n\n${this._asTaggedBlock('proof_notebook', currentNotebook)}\n\n<source_search_request stage="${stageIndex}">
+Plan Fermat-native source search for the selected obligations. Prefer primary mathematical sources and exact theorem families. Return strict JSON only.
+</source_search_request>`,
+      null,
+      apiKey,
+      model,
+      sourceSearchSkill,
+      signal,
+    );
+    const planJson = this._parseStrictJson(planRaw, 'source search plan');
+    const searchPlan = normalizeSearchPlan(planJson, {
+      target: targetNode,
+      obligations: schedulerDecision.selectedObligations || [],
+      providers,
+      budget,
+    });
+    const searchRunId = `search-${Date.now()}-${stageIndex}`;
+
+    appendRunEvent('source_search.planned', {
+      stage: stageIndex,
+      runId: searchRunId,
+      searchPlan,
+    });
+
+    emitStatus('max-source-search', { stage: stageIndex, queries: searchPlan.queries.length });
+    const searchRun = await runNativeSourceSearch(searchPlan, {
+      runId: searchRunId,
+      filePath: options.marker?.filePath || null,
+      projectDir: options.marker?.projectDir || null,
+      providers,
+      budget,
+    });
+    const searchRunPath = persistResearchRun(searchRun, fermatDir);
+    const sourceCards = sourceStore.saveCards(searchRun.sourceCards || []);
+    for (const sourceCard of sourceCards) {
+      appendRunEvent('source_card.created', { stage: stageIndex, sourceCard });
+    }
+    appendRunEvent(searchRun.status === 'failed' ? 'source_search.failed' : 'source_search.completed', {
+      stage: stageIndex,
+      runId: searchRun.runId,
+      searchRunPath,
+      sourceCardIds: sourceCards.map(card => card.id),
+      errors: searchRun.errors || [],
+    });
+
+    let readJson = { sourceCards: [], ledgerProposals: [], openQuestions: [] };
+    if (sourceCards.length > 0) {
+      emitStatus('max-read-sources', { stage: stageIndex, sources: sourceCards.length });
+      const readRaw = await this._callLlm(
+        `${stageContext}\n\n${formatSourceCardsForPrompt(sourceCards, { maxCards: budget.maxSources })}\n\n<source_read_request stage="${stageIndex}">
+Extract only source-supported claims relevant to the current target and selected obligations. Return strict JSON only.
+</source_read_request>`,
+        null,
+        apiKey,
+        model,
+        readPaperSkill,
+        signal,
+      );
+      readJson = this._parseStrictJson(readRaw, 'source reader');
+      const cardsById = new Map(sourceCards.map(card => [card.id, card]));
+      const updatedCards = (readJson.sourceCards || []).map(item => {
+        const base = cardsById.get(item.id) || {};
+        return sourceStore.saveCard(normalizeSourceCard({
+          ...base,
+          ...item,
+          id: item.id || base.id,
+          reviewStatus: item.reviewStatus || 'read',
+          reviewedAt: new Date().toISOString(),
+        }));
+      });
+      for (const card of updatedCards) {
+        cardsById.set(card.id, card);
+      }
+      const mergedCards = [...cardsById.values()];
+      appendRunEvent('paper_read.completed', {
+        stage: stageIndex,
+        sourceCards: mergedCards,
+        text: readRaw,
+      });
+      sourceCards.splice(0, sourceCards.length, ...mergedCards);
+    }
+
+    const readProposals = Array.isArray(readJson.ledgerProposals) ? readJson.ledgerProposals : [];
+    const storedReadProposals = knowledgeStore.addProposals(readProposals.map(item => ({
+      ...item,
+      provenance: [{ sourceType: 'paper_read', sourceId: searchRun.runId }],
+    })));
+    for (const proposal of storedReadProposals) {
+      appendRunEvent('ledger.proposal.created', { stage: stageIndex, proposal });
+    }
+
+    emitStatus('max-research', { stage: stageIndex, sources: sourceCards.length });
+    const research = await this._callLlm(
+      `${stageContext}\n\n${formatSourceCardsForPrompt(sourceCards, { maxCards: budget.maxSources })}\n\n${formatEvidencePolicyForPrompt({ sourceCards })}\n\n<research_task stage="${stageIndex}">
+Use only the Fermat source cards and existing ledger. Produce source-backed facts, techniques, open questions, and ledger entries. Do not invent sources.
+</research_task>`,
+      null,
+      apiKey,
+      model,
+      researchSkill,
+      signal,
+    );
+    const researchProposals = extractLedgerProposalsFromResearch(research, [{ sourceType: 'research', sourceId: searchRun.runId }]);
+    const storedResearchProposals = knowledgeStore.addProposals(researchProposals);
+    for (const proposal of storedResearchProposals) {
+      appendRunEvent('ledger.proposal.created', { stage: stageIndex, proposal });
+    }
+    appendRunEvent('research.completed', {
+      stage: stageIndex,
+      text: research,
+    });
+
+    return {
+      searchPlan,
+      searchRun,
+      searchRunPath,
+      sourceCards,
+      paperRead: readJson,
+      research,
+      ledgerProposals: [...storedReadProposals, ...storedResearchProposals],
+    };
+  }
+
+  async _proveSelectedSubgoals({
+    stageIndex,
+    stageContext,
+    schedulerDecision,
+    proveSkill,
+    verifySkill,
+    apiKey,
+    model,
+    signal,
+    appendRunEvent,
+    emitStatus,
+  }) {
+    const obligations = (schedulerDecision.selectedObligations || [])
+      .filter(item => item.usePolicy === 'prove_inline' || item.usePolicy === 'prove_as_sublemma')
+      .slice(0, 2);
+    if (obligations.length === 0) return [];
+
+    emitStatus('max-subgoal-drafting', { stage: stageIndex, obligations: obligations.length });
+    const partialResults = [];
+    for (const [index, obligation] of obligations.entries()) {
+      const raw = await this._callLlm(
+        `${stageContext}\n\n<subgoal_to_prove id="${this._escapeXmlAttr(obligation.id)}" stage="${stageIndex}">
+<statement>${this._escapeXmlText(obligation.statement)}</statement>
+<needed_for>${this._escapeXmlText(obligation.neededFor || '')}</needed_for>
+<proof_hint>${this._escapeXmlText(obligation.proofHint || '')}</proof_hint>
+</subgoal_to_prove>
+
+<subgoal_directive>
+Write a self-contained LaTeX proof of this subgoal only. Do not prove the main target unless it is identical to the subgoal. Obey the evidence policy.
+</subgoal_directive>`,
+        null,
+        apiKey,
+        model,
+        proveSkill,
+        signal,
+      );
+      const proof = this._extractProof(raw);
+      appendRunEvent('attempt.completed', {
+        stage: stageIndex,
+        index: `subgoal-${index}`,
+        role: 'subgoal-proof',
+        raw,
+        proof,
+        selectedObligationIds: [obligation.id],
+      });
+
+      const verdict = await this._callLlm(
+        `${stageContext}\n\n<subgoal_to_verify id="${this._escapeXmlAttr(obligation.id)}">
+<statement>${this._escapeXmlText(obligation.statement)}</statement>
+</subgoal_to_verify>
+
+<proof_to_verify>
+${raw}
+</proof_to_verify>`,
+        null,
+        apiKey,
+        model,
+        verifySkill,
+        signal,
+      );
+      const verdictTag = this._normalizeVerdictForProof(this._extractVerdictTag(verdict), proof);
+      appendRunEvent('verification.completed', {
+        stage: stageIndex,
+        index: `subgoal-${index}`,
+        role: 'subgoal-proof',
+        verdictTag,
+        verdict,
+        selectedObligationIds: [obligation.id],
+      });
+      if (verdictTag === 'PASS') {
+        const partial = {
+          id: `partial:${obligation.id}`,
+          stage: stageIndex,
+          obligationId: obligation.id,
+          statement: obligation.statement,
+          proof,
+          verdictTag,
+          source: 'run_verified',
+        };
+        appendRunEvent('partial_result.verified', partial);
+        partialResults.push(partial);
+      }
+    }
+    return partialResults;
+  }
+
+  _formatPartialResultsForPrompt(partialResults = []) {
+    if (!partialResults.length) return '<run_verified_facts>\n  <none />\n</run_verified_facts>';
+    return [
+      '<run_verified_facts>',
+      ...partialResults.map(item => [
+        `  <fact id="${this._escapeXmlAttr(item.id || item.obligationId || '')}" tier="RUN_VERIFIED" use_policy="cite_directly">`,
+        `    <statement>${this._escapeXmlText(item.statement || '')}</statement>`,
+        `    <source>${this._escapeXmlText(item.source || 'run_verified')}</source>`,
+        '  </fact>',
+      ].join('\n')),
+      '</run_verified_facts>',
+    ].join('\n');
+  }
+
   _compactProofRun(run) {
     const compactAttempt = (attempt = {}) => ({
       index: attempt.index,
@@ -1658,9 +2078,35 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
       runPath: run.runPath || null,
       width: run.width,
       maxStages: run.maxStages,
+      sourceSearchEnabled: !!run.sourceSearchEnabled,
+      sourceSearchProviders: run.sourceSearchProviders || [],
+      sourceSearchBudget: run.sourceSearchBudget || null,
+      finalStatus: run.finalStatus || null,
       selectedAttempt: run.selectedAttempt,
       finalVerdictTag: this._extractVerdictTag(run.finalVerdict),
       notebook: this._truncateForPrompt(run.notebook || '', 5000),
+      sourceCards: (run.sourceCards || []).map(card => ({
+        id: card.id,
+        sourceType: card.sourceType,
+        title: this._truncateForPrompt(card.title || '', 300),
+        url: card.url || '',
+        reviewStatus: card.reviewStatus || '',
+        extractedClaimCount: card.extractedClaimCount || 0,
+      })),
+      ledgerProposals: (run.ledgerProposals || []).map(proposal => ({
+        id: proposal.id,
+        tier: proposal.tier,
+        usePolicy: proposal.usePolicy,
+        statement: this._truncateForPrompt(proposal.statement || '', 500),
+        status: proposal.status,
+      })),
+      partialResults: (run.partialResults || []).map(item => ({
+        id: item.id,
+        stage: item.stage,
+        obligationId: item.obligationId,
+        statement: this._truncateForPrompt(item.statement || '', 500),
+        source: item.source,
+      })),
       attempts: (run.attempts || []).map(compactAttempt),
       stages: (run.stages || []).map(stage => ({
         index: stage.index,
@@ -1686,6 +2132,21 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
         notebook: this._truncateForPrompt(stage.notebook || '', 2500),
         nextNotebook: this._truncateForPrompt(stage.nextNotebook || '', 2500),
         research: this._truncateForPrompt(stage.research || '', 2500),
+        nativeResearch: stage.nativeResearch ? {
+          searchRunPath: stage.nativeResearch.searchRunPath || null,
+          sourceCards: (stage.nativeResearch.sourceCards || []).map(card => ({
+            id: card.id,
+            title: this._truncateForPrompt(card.title || '', 250),
+            sourceType: card.sourceType,
+            reviewStatus: card.reviewStatus,
+          })),
+          ledgerProposalCount: stage.nativeResearch.ledgerProposals?.length || 0,
+        } : null,
+        partialResults: (stage.partialResults || []).map(item => ({
+          id: item.id,
+          obligationId: item.obligationId,
+          statement: this._truncateForPrompt(item.statement || '', 300),
+        })),
         attempts: (stage.attempts || []).map(compactAttempt),
       })),
     };
@@ -2036,6 +2497,13 @@ Keep unrelated \`sorry\` placeholders unchanged.`;
     return String(value)
       .replace(/&/g, '&amp;')
       .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  _escapeXmlText(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
   }

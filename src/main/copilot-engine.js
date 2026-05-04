@@ -55,6 +55,10 @@ class FermatEngine extends EventEmitter {
       skipVerifyEffort: ['low'],
       maxProofWidth: 3,
       maxProofStages: 3,
+      enableSourceSearch: true,
+      sourceSearchProviders: ['arxiv', 'crossref', 'local_bib', 'local_pdf', 'project_web'],
+      maxSources: 6,
+      maxResultsPerQuery: 3,
       verificationMode: 'off',         // 'off' | 'lean'
       lean: { binaryPath: '', maxRetries: 3 },
     };
@@ -94,6 +98,21 @@ class FermatEngine extends EventEmitter {
     }
     if (!Number.isFinite(this.config.maxProofStages) || this.config.maxProofStages < 1) {
       this.config.maxProofStages = 3;
+    }
+    if (!Array.isArray(this.config.sourceSearchProviders)) {
+      this.config.sourceSearchProviders = String(this.config.sourceSearchProviders || '')
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+    }
+    if (this.config.sourceSearchProviders.length === 0) {
+      this.config.sourceSearchProviders = ['arxiv', 'crossref', 'local_bib', 'local_pdf', 'project_web'];
+    }
+    if (!Number.isFinite(this.config.maxSources) || this.config.maxSources < 1) {
+      this.config.maxSources = 6;
+    }
+    if (!Number.isFinite(this.config.maxResultsPerQuery) || this.config.maxResultsPerQuery < 1) {
+      this.config.maxResultsPerQuery = 3;
     }
     // Propagate mathlib flag to the runner whenever it changes.
     // Binary detection (detect()) is NOT triggered here — that is main.js's
@@ -312,6 +331,10 @@ class FermatEngine extends EventEmitter {
         maxLeanRetries: this.config.lean?.maxRetries ?? 3,
         maxProofWidth: this.config.maxProofWidth ?? 3,
         maxProofStages: this.config.maxProofStages ?? 3,
+        enableSourceSearch: effort === 'max' ? this.config.enableSourceSearch !== false : !!this.config.enableSourceSearchForHigh,
+        sourceSearchProviders: this.config.sourceSearchProviders,
+        maxSources: this.config.maxSources ?? 6,
+        maxResultsPerQuery: this.config.maxResultsPerQuery ?? 3,
         onStatementReview,
         taskId: task.id,
         signal: task.abortController.signal, // B-03: forward cancel into backend

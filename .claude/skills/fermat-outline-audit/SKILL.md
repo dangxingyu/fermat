@@ -83,6 +83,16 @@ The top-level object must have this shape:
           "neededFor": "Uniqueness of factorization."
         }
       ],
+      "sourceBackedFacts": [
+        {
+          "statement": "A source-backed theorem from the project ledger is relevant.",
+          "sourceId": "src-...",
+          "sourceRef": "Theorem 1.2",
+          "tier": "T1_SOURCE_BACKED",
+          "usePolicy": "cite_directly",
+          "conditionMatch": "matches"
+        }
+      ],
       "warnings": [
         {
           "statement": "Do not use the target theorem as a prerequisite.",

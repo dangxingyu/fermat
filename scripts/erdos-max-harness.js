@@ -26,6 +26,10 @@ function parseArgs(argv) {
     mode: 'triage',
     maxWidth: 2,
     maxStages: 1,
+    search: true,
+    searchProviders: ['arxiv', 'crossref', 'local_bib', 'local_pdf', 'project_web'],
+    maxSources: 6,
+    maxResultsPerQuery: 3,
     skipVerify: false,
     delayMs: 250,
     timeoutMs: 10 * 60 * 1000,
@@ -51,6 +55,11 @@ function parseArgs(argv) {
     else if (arg === '--timeout-ms') args.timeoutMs = Number(next), i++;
     else if (arg === '--max-width') args.maxWidth = Number(next), i++;
     else if (arg === '--max-stages') args.maxStages = Number(next), i++;
+    else if (arg === '--search') args.search = true;
+    else if (arg === '--no-search') args.search = false;
+    else if (arg === '--search-provider' || arg === '--search-providers') args.searchProviders = next.split(',').map(s => s.trim()).filter(Boolean), i++;
+    else if (arg === '--max-sources') args.maxSources = Number(next), i++;
+    else if (arg === '--max-results-per-query') args.maxResultsPerQuery = Number(next), i++;
     else if (arg === '--skip-verify') args.skipVerify = true;
     else if (arg === '--no-notes') args.includeNotes = false;
     else if (arg === '--help') {
@@ -84,6 +93,10 @@ Options:
   --mode triage|solve                        Prompt style for attempts (default: triage)
   --max-width N                              Fermat max pipeline width (default: 2)
   --max-stages N                             Fermat max pipeline stages (default: 1)
+  --search / --no-search                     Enable Fermat-native source search for max (default: on)
+  --search-providers a,b                     Providers (default: arxiv,crossref,local_bib,local_pdf,project_web)
+  --max-sources N                            Max source cards per research stage (default: 6)
+  --max-results-per-query N                  Max native results per query (default: 3)
   --skip-verify                              Skip Fermat verifier calls inside max pipeline
   --delay-ms N                               Polite delay between site fetches (default: 250)
   --no-notes                                 Prompt claude-xhigh with statement only
@@ -396,6 +409,10 @@ async function runFermatMax(problem, args, outDir) {
       skipVerify: args.skipVerify,
       maxProofWidth: args.maxWidth,
       maxProofStages: args.maxStages,
+      enableSourceSearch: args.search,
+      sourceSearchProviders: args.searchProviders,
+      maxSources: args.maxSources,
+      maxResultsPerQuery: args.maxResultsPerQuery,
       signal: controller.signal,
       onStatus: status => {
         statusLog.push({ at: new Date().toISOString(), ...status });
@@ -420,6 +437,10 @@ async function runFermatMax(problem, args, outDir) {
         model: args.model,
         maxProofWidth: args.maxWidth,
         maxProofStages: args.maxStages,
+        enableSourceSearch: args.search,
+        sourceSearchProviders: args.searchProviders,
+        maxSources: args.maxSources,
+        maxResultsPerQuery: args.maxResultsPerQuery,
         skipVerify: args.skipVerify,
       },
       statusLog,

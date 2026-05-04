@@ -23,6 +23,10 @@ const settingsStore = new Store({
       skipVerifyEffort: ['low'],
       maxProofWidth: 3,
       maxProofStages: 3,
+      enableSourceSearch: true,
+      sourceSearchProviders: ['arxiv', 'crossref', 'local_bib', 'local_pdf', 'project_web'],
+      maxSources: 6,
+      maxResultsPerQuery: 3,
       verificationMode: 'off',
       lean: { binaryPath: '', maxRetries: 3, usesMathlib: true, useRepl: true },
     },
@@ -666,6 +670,81 @@ ipcMain.handle('outline:audit', async (_event, { content, filePath, outline, for
     apiKey: modelConfig.apiKey,
     model: modelConfig.model || config.models?.claude?.model || 'claude-sonnet-4-6',
   });
+});
+
+// ─── Fermat-native Research Stores ────────────────────────────────
+ipcMain.handle('research:search', async (_event, { filePath, projectDir, target, obligations, providers, budget, force } = {}) => {
+  void force;
+  const {
+    normalizeSearchPlan,
+    persistResearchRun,
+    runNativeSourceSearch,
+  } = require('./native-research');
+  const { SourceStore, resolveFermatDir } = require('./source-store');
+  const fermatDir = resolveFermatDir({ filePath, projectDir });
+  if (!fermatDir) throw new Error('research.search requires filePath or projectDir');
+  const config = settingsStore.get('copilot') || {};
+  const searchPlan = normalizeSearchPlan({}, {
+    target,
+    obligations,
+    providers: providers || config.sourceSearchProviders,
+    budget: budget || {
+      maxSources: config.maxSources,
+      maxResultsPerQuery: config.maxResultsPerQuery,
+    },
+  });
+  const run = await runNativeSourceSearch(searchPlan, {
+    filePath,
+    projectDir,
+    providers: providers || config.sourceSearchProviders,
+    budget: budget || {
+      maxSources: config.maxSources,
+      maxResultsPerQuery: config.maxResultsPerQuery,
+    },
+  });
+  const sourceStore = new SourceStore(fermatDir);
+  run.sourceCards = sourceStore.saveCards(run.sourceCards || []);
+  const searchRunPath = persistResearchRun(run, fermatDir);
+  return { ...run, searchRunPath };
+});
+
+ipcMain.handle('research:load-run', async (_event, { filePath, projectDir, runId } = {}) => {
+  const { resolveFermatDir } = require('./source-store');
+  const fermatDir = resolveFermatDir({ filePath, projectDir });
+  if (!fermatDir || !runId) return null;
+  const runPath = path.join(fermatDir, 'search-runs', `${runId}.json`);
+  if (!fs.existsSync(runPath)) return null;
+  return JSON.parse(fs.readFileSync(runPath, 'utf-8'));
+});
+
+ipcMain.handle('sources:list', async (_event, { filePath, projectDir } = {}) => {
+  const { SourceStore, resolveFermatDir } = require('./source-store');
+  const fermatDir = resolveFermatDir({ filePath, projectDir });
+  if (!fermatDir) return [];
+  return new SourceStore(fermatDir).listCards();
+});
+
+ipcMain.handle('sources:open', async (_event, { filePath, projectDir, sourceId } = {}) => {
+  const { SourceStore, resolveFermatDir } = require('./source-store');
+  const fermatDir = resolveFermatDir({ filePath, projectDir });
+  if (!fermatDir || !sourceId) return null;
+  return new SourceStore(fermatDir).openCard(sourceId);
+});
+
+ipcMain.handle('ledger:proposals', async (_event, { filePath, projectDir, includeAccepted } = {}) => {
+  const { KnowledgeStore } = require('./knowledge-store');
+  const { resolveFermatDir } = require('./source-store');
+  const fermatDir = resolveFermatDir({ filePath, projectDir });
+  if (!fermatDir) return [];
+  return new KnowledgeStore(fermatDir).listProposals({ includeAccepted: !!includeAccepted });
+});
+
+ipcMain.handle('ledger:accept-proposal', async (_event, { filePath, projectDir, proposalId } = {}) => {
+  const { KnowledgeStore } = require('./knowledge-store');
+  const { resolveFermatDir } = require('./source-store');
+  const fermatDir = resolveFermatDir({ filePath, projectDir });
+  if (!fermatDir) throw new Error('ledger.acceptProposal requires filePath or projectDir');
+  return new KnowledgeStore(fermatDir).acceptProposal(proposalId);
 });
 
 // ─── Auto-updater IPC ──────────────────────────────────────────────

@@ -121,10 +121,14 @@ function ProofCard({ review, onAccept, onReject }) {
 function EffortPipelineNotes({ review }) {
   const pipeline = review.maxPipeline || review.proofPipeline || {};
   const attempts = Array.isArray(pipeline.attempts) ? pipeline.attempts : [];
+  const sourceCards = Array.isArray(pipeline.sourceCards) ? pipeline.sourceCards : [];
+  const partialResults = Array.isArray(pipeline.partialResults) ? pipeline.partialResults : [];
+  const ledgerProposals = Array.isArray(pipeline.ledgerProposals) ? pipeline.ledgerProposals : [];
   const notebook = review.proofNotebook || pipeline.notebook || '';
   const notebookStatus = extractTag(notebook, 'status') || 'unknown';
   const notebookSummary = extractTag(notebook, 'summary');
   const finalVerdict = extractVerdictTag(pipeline.finalVerdict || review.verdict);
+  const finalStatus = pipeline.finalStatus || (finalVerdict === 'PASS' ? 'proved' : 'pending');
   const selected = pipeline.selectedAttempt === 'repair'
     ? 'repair pass'
     : Number.isInteger(pipeline.selectedAttempt)
@@ -135,7 +139,7 @@ function EffortPipelineNotes({ review }) {
     <details className="proof-pipeline-notes">
       <summary>
         <span>{pipeline.mode === 'max-long-range' ? 'Max pipeline' : 'Proof pipeline'}</span>
-        <span>{attempts.length} drafts &middot; {finalVerdict} &middot; {selected}</span>
+        <span>{attempts.length} drafts &middot; {finalStatus} &middot; {selected}</span>
       </summary>
       <div className="proof-pipeline-body">
         <div className="proof-pipeline-row">
@@ -167,8 +171,76 @@ function EffortPipelineNotes({ review }) {
             <span>{extractResearchSignal(review.research || pipeline.research)}</span>
           </div>
         )}
+        {sourceCards.length > 0 && (
+          <ResearchList
+            title="Source cards"
+            items={sourceCards}
+            renderItem={(item) => (
+              <>
+                <span>{item.title || item.id}</span>
+                <span>{item.sourceType || 'source'} · {item.reviewStatus || 'candidate'} · {item.extractedClaimCount || 0} claims</span>
+              </>
+            )}
+          />
+        )}
+        {partialResults.length > 0 && (
+          <ResearchList
+            title="Verified partials"
+            items={partialResults}
+            renderItem={(item) => (
+              <>
+                <span>{item.statement || item.id}</span>
+                <span>{item.source || 'run_verified'}</span>
+              </>
+            )}
+          />
+        )}
+        {ledgerProposals.length > 0 && (
+          <LedgerProposalList proposals={ledgerProposals} filePath={review.marker?.filePath} />
+        )}
       </div>
     </details>
+  );
+}
+
+function ResearchList({ title, items, renderItem }) {
+  return (
+    <div className="proof-research-list">
+      <div className="proof-research-title">{title}</div>
+      {items.map((item, index) => (
+        <div className="proof-research-row" key={item.id || index}>
+          {renderItem(item)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function LedgerProposalList({ proposals, filePath }) {
+  const [accepted, setAccepted] = useState(new Set());
+  const handleAccept = async (proposalId) => {
+    if (!window.api?.ledger?.acceptProposal || !filePath) return;
+    await window.api.ledger.acceptProposal({ filePath, proposalId });
+    setAccepted(prev => new Set([...prev, proposalId]));
+  };
+
+  return (
+    <div className="proof-research-list">
+      <div className="proof-research-title">Ledger proposals</div>
+      {proposals.map((proposal) => (
+        <div className="proof-research-row ledger" key={proposal.id}>
+          <span>{proposal.statement || proposal.id}</span>
+          <span>{proposal.tier} · {proposal.usePolicy}</span>
+          <button
+            type="button"
+            disabled={!filePath || accepted.has(proposal.id) || proposal.status === 'accepted'}
+            onClick={() => handleAccept(proposal.id)}
+          >
+            {accepted.has(proposal.id) || proposal.status === 'accepted' ? 'Accepted' : 'Accept'}
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }
 

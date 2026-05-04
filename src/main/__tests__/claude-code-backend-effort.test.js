@@ -60,6 +60,8 @@ describe('ClaudeCodeBackend effort proof helpers', () => {
 
     expect(backend._boundedInt('10', 3, 2, 5)).toBe(5);
     expect(backend._boundedInt('bad', 3, 2, 5)).toBe(3);
+    expect(backend._sourceSearchEnabled({})).toBe(true);
+    expect(backend._sourceSearchEnabled({ enableSourceSearch: false })).toBe(false);
     expect(backend._maxAttemptDirectives(3, 2).map(d => d.role)).toEqual([
       'primary',
       'obligation-first',
@@ -130,5 +132,31 @@ describe('ClaudeCodeBackend effort proof helpers', () => {
     expect(saved.run.mode).toBe('max-long-range');
     expect(saved.run.finalVerdictTag).toBe('FAIL');
     expect(saved.target.labels).toEqual(['thm:target']);
+  });
+
+  it('includes Fermat-native research artifacts in compact max snapshots', () => {
+    const backend = makeBackend();
+    const run = {
+      mode: 'max-long-range',
+      runId: 'run-native',
+      width: 2,
+      maxStages: 1,
+      sourceSearchEnabled: true,
+      sourceSearchProviders: ['arxiv'],
+      sourceSearchBudget: { maxSources: 2 },
+      finalStatus: 'partial_progress',
+      sourceCards: [{ id: 'src-1', sourceType: 'arxiv', title: 'A paper', reviewStatus: 'read', extractedClaimCount: 1 }],
+      ledgerProposals: [{ id: 'proposal-1', tier: 'T1_SOURCE_BACKED', usePolicy: 'cite_directly', statement: 'A theorem.' }],
+      partialResults: [{ id: 'partial-1', statement: 'A proved sublemma.', source: 'run_verified' }],
+      attempts: [],
+      stages: [],
+    };
+
+    const compact = backend._compactProofRun(run);
+
+    expect(compact.finalStatus).toBe('partial_progress');
+    expect(compact.sourceCards[0]).toMatchObject({ id: 'src-1', extractedClaimCount: 1 });
+    expect(compact.ledgerProposals[0].statement).toBe('A theorem.');
+    expect(compact.partialResults[0].statement).toBe('A proved sublemma.');
   });
 });

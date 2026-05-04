@@ -41,17 +41,19 @@ export function annotateOutlineWithAudit(outline, audit) {
 
 export function countCopilotNotes(copilot) {
   if (!copilot) {
-    return { suggested: 0, missing: 0, obligations: 0, warnings: 0, total: 0 };
+    return { suggested: 0, missing: 0, obligations: 0, sources: 0, warnings: 0, total: 0 };
   }
   const suggested = copilot.suggestedDependencies?.length || 0;
   const missing = copilot.missingCitations?.length || 0;
   const obligations = copilot.proofObligations?.length || 0;
+  const sources = copilot.sourceBackedFacts?.length || 0;
   const warnings = (copilot.warnings?.length || 0) + (copilot.status === 'stale' ? 1 : 0);
   return {
     suggested,
     missing,
     obligations,
+    sources,
     warnings,
-    total: suggested + missing + obligations + warnings,
+    total: suggested + missing + obligations + sources + warnings,
   };
 }

@@ -26,6 +26,7 @@ You may receive:
 - `<proof_plan>`.
 - `<research_review>`: source-discipline review from existing project source
   material, if the notebook requested research.
+- `<source_cards>` and `<evidence_policy>` from Fermat-native source search.
 - `<proof_attempts>`: proof drafts and verifier reports from this run.
 - `<full_document>`.
 
@@ -86,7 +87,7 @@ Output exactly one `<proof_notebook>` block.
   </discarded_routes>
 
   <next_actions>
-    <action priority="1" kind="prove_inline | prove_sublemma | revise_proof | research | stop">
+    <action priority="1" kind="prove_inline | prove_sublemma | source_search | read_source | revise_proof | research | stop">
       <description>...</description>
     </action>
   </next_actions>

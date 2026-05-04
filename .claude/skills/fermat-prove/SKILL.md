@@ -29,6 +29,7 @@ The prompt may include:
 - `<research_review>`: source-discipline review from existing project papers,
   bibliography snippets, or ledger material. It can support use only when it
   records matching source conditions.
+- `<source_cards>` and `<evidence_policy>`.
 - `<user_sketch>`.
 - `<full_document>`.
 

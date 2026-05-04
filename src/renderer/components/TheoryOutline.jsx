@@ -157,6 +157,21 @@ function CopilotNotes({ node, citedNodes }) {
         )}
       />
       <NoteGroup
+        title="Source-backed"
+        items={copilot.sourceBackedFacts || []}
+        empty="No source-backed facts attached."
+        renderItem={(item) => (
+          <>
+            <span className="note-main">{item.statement}</span>
+            <span className="note-meta">
+              {item.sourceRef || item.sourceId}
+              <PolicyTag value={item.usePolicy} />
+            </span>
+            {item.conditionMatch && <span className="note-reason">{item.conditionMatch}</span>}
+          </>
+        )}
+      />
+      <NoteGroup
         title="Obligations"
         items={copilot.proofObligations || []}
         empty="No proof obligations recorded."
@@ -197,6 +212,7 @@ function CopilotBadges({ copilot }) {
     <span className="copilot-badges" aria-label="Copilot annotations">
       {counts.suggested > 0 && <span className="copilot-badge suggested">+{counts.suggested}</span>}
       {counts.missing > 0 && <span className="copilot-badge missing">c{counts.missing}</span>}
+      {counts.sources > 0 && <span className="copilot-badge sources">s{counts.sources}</span>}
       {counts.obligations > 0 && <span className="copilot-badge obligations">!{counts.obligations}</span>}
       {counts.warnings > 0 && <span className="copilot-badge warnings">?{counts.warnings}</span>}
     </span>

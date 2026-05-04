@@ -213,4 +213,72 @@ describe('proof-run event log and obligation graph', () => {
       body: '<statement>S</statement>',
     }]);
   });
+
+  it('records Fermat-native source search and verified partial results', () => {
+    const run = createProofRun({
+      runId: 'run-native-research',
+      target: { id: 'n-native', type: 'conjecture', name: 'Target' },
+      config: { effort: 'max' },
+    });
+
+    appendProofRunEvent(run, 'plan.completed', {
+      text: [
+        '<proof_plan>',
+        '  <obligation id="bridge" use_policy="prove_as_sublemma" confidence="high">',
+        '    <statement>A bridge lemma converts source bounds into the target.</statement>',
+        '  </obligation>',
+        '</proof_plan>',
+      ].join('\n'),
+    });
+    const obligationId = Object.values(run.obligationGraph.obligations)[0].id;
+    appendProofRunEvent(run, 'source_search.completed', {
+      runId: 'search-1',
+      sourceCardIds: ['src-1'],
+    });
+    appendProofRunEvent(run, 'source_card.created', {
+      sourceCard: { id: 'src-1', sourceType: 'arxiv', title: 'A paper', extractedClaims: [{ statement: 'A claim' }] },
+    });
+    appendProofRunEvent(run, 'ledger.proposal.created', {
+      proposal: {
+        id: 'proposal-1',
+        tier: 'T1_SOURCE_BACKED',
+        usePolicy: 'cite_directly',
+        statement: 'A claim',
+        sourceRefs: 'src-1',
+      },
+    });
+    appendProofRunEvent(run, 'attempt.completed', {
+      stage: 1,
+      index: 'subgoal-0',
+      role: 'subgoal-proof',
+      proof: '\\begin{proof}x\\end{proof}',
+      selectedObligationIds: [obligationId],
+    });
+    appendProofRunEvent(run, 'verification.completed', {
+      stage: 1,
+      index: 'subgoal-0',
+      role: 'subgoal-proof',
+      verdictTag: 'PASS',
+      verdict: '<verdict>PASS</verdict>',
+      selectedObligationIds: [obligationId],
+    });
+
+    expect(run.obligationGraph.status).not.toBe('proved');
+
+    appendProofRunEvent(run, 'partial_result.verified', {
+      obligationId,
+      statement: 'A bridge lemma converts source bounds into the target.',
+      proof: '\\begin{proof}x\\end{proof}',
+    });
+
+    expect(run.obligationGraph.sourceCards['src-1']).toMatchObject({ title: 'A paper' });
+    expect(run.obligationGraph.ledgerProposals['proposal-1']).toMatchObject({ tier: 'T1_SOURCE_BACKED' });
+    expect(Object.values(run.obligationGraph.partialResults)[0]).toMatchObject({ obligationId });
+    expect(run.obligationGraph.obligations[obligationId]).toMatchObject({
+      status: 'proved',
+      tier: 'RUN_VERIFIED',
+      usePolicy: 'cite_directly',
+    });
+    expect(run.obligationGraph.status).toBe('partial_progress');
+  });
 });

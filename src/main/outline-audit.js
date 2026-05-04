@@ -120,6 +120,17 @@ function cleanWarning(item = {}) {
   };
 }
 
+function cleanSourceFact(item = {}) {
+  return {
+    statement: asString(item.statement || item.claim).trim(),
+    sourceId: asString(item.sourceId || item.source_id || item.source).trim(),
+    sourceRef: asString(item.sourceRef || item.source_ref || item.location).trim(),
+    tier: asString(item.tier || 'T1_SOURCE_BACKED').trim(),
+    usePolicy: cleanUsePolicy(item.usePolicy || item.use_policy || 'cite_directly'),
+    conditionMatch: asString(item.conditionMatch || item.condition_match || 'unknown').trim(),
+  };
+}
+
 function cleanMissingCitation(item = {}) {
   return {
     statement: asString(item.statement || item.claim).trim(),
@@ -158,6 +169,7 @@ function normalizeOutlineAudit(rawAudit, { outline, texContent, filePath }) {
     const suggestionSource = rawNode.suggestedDependencies || rawNode.suggested_dependencies;
     const missingSource = rawNode.missingCitations || rawNode.missing_citations;
     const obligationSource = rawNode.proofObligations || rawNode.proof_obligations;
+    const sourceFactSource = rawNode.sourceBackedFacts || rawNode.source_backed_facts;
 
     nodes[key] = {
       nodeKey: key,
@@ -175,6 +187,9 @@ function normalizeOutlineAudit(rawAudit, { outline, texContent, filePath }) {
         .filter(item => item.statement || item.suggestedLabel),
       proofObligations: asArray(obligationSource)
         .map(cleanObligation)
+        .filter(item => item.statement),
+      sourceBackedFacts: asArray(sourceFactSource)
+        .map(cleanSourceFact)
         .filter(item => item.statement),
       warnings: asArray(rawNode.warnings)
         .map(cleanWarning)

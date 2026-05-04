@@ -391,6 +391,7 @@ body::before {
 
 .copilot-badge.suggested { color: var(--verdigris); }
 .copilot-badge.missing { color: var(--accent); }
+.copilot-badge.sources { color: var(--text-secondary); }
 .copilot-badge.obligations { color: var(--ochre); }
 .copilot-badge.warnings { color: var(--vermillion); }
 
@@ -827,6 +828,59 @@ body::before {
   border-top: 1px solid var(--border-soft);
   padding-top: 6px;
   margin-top: 6px;
+}
+
+.proof-research-list {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 8px;
+  padding-top: 7px;
+}
+
+.proof-research-title {
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-style: italic;
+  margin-bottom: 4px;
+}
+
+.proof-research-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 3px 0;
+}
+
+.proof-research-row.ledger {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.proof-research-row span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.proof-research-row span:nth-child(2) {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.proof-research-row button {
+  border: 1px solid var(--border);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 7px;
+}
+
+.proof-research-row button:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .proof-card-actions {

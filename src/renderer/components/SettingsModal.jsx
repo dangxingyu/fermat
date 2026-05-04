@@ -12,6 +12,10 @@ export default function SettingsModal({ onClose }) {
     autoInlineLow: true,
     maxProofWidth: 3,
     maxProofStages: 3,
+    enableSourceSearch: true,
+    sourceSearchProviders: 'arxiv,crossref,local_bib,local_pdf,project_web',
+    maxSources: 6,
+    maxResultsPerQuery: 3,
     // Lean 4
     verificationMode: 'off',   // 'off' | 'lean'
     leanBinaryPath: '',        // empty → auto-detect
@@ -40,6 +44,12 @@ export default function SettingsModal({ onClose }) {
               : prev.autoInlineLow,
             maxProofWidth:     copilot?.maxProofWidth                       ?? prev.maxProofWidth,
             maxProofStages:    copilot?.maxProofStages                      ?? prev.maxProofStages,
+            enableSourceSearch: copilot?.enableSourceSearch                 ?? prev.enableSourceSearch,
+            sourceSearchProviders: Array.isArray(copilot?.sourceSearchProviders)
+              ? copilot.sourceSearchProviders.join(',')
+              : (copilot?.sourceSearchProviders ?? prev.sourceSearchProviders),
+            maxSources:        copilot?.maxSources                          ?? prev.maxSources,
+            maxResultsPerQuery: copilot?.maxResultsPerQuery                 ?? prev.maxResultsPerQuery,
             verificationMode:  copilot?.verificationMode                    ?? prev.verificationMode,
             leanBinaryPath:    copilot?.lean?.binaryPath                    ?? prev.leanBinaryPath,
             leanMaxRetries:    copilot?.lean?.maxRetries                    ?? prev.leanMaxRetries,
@@ -92,6 +102,10 @@ export default function SettingsModal({ onClose }) {
         skipVerifyEffort: ['low'],
         maxProofWidth: settings.maxProofWidth,
         maxProofStages: settings.maxProofStages,
+        enableSourceSearch: settings.enableSourceSearch,
+        sourceSearchProviders: settings.sourceSearchProviders.split(',').map(s => s.trim()).filter(Boolean),
+        maxSources: settings.maxSources,
+        maxResultsPerQuery: settings.maxResultsPerQuery,
         verificationMode: settings.verificationMode,
         lean: {
           binaryPath:   settings.leanBinaryPath,
@@ -176,6 +190,36 @@ export default function SettingsModal({ onClose }) {
               type="number" min={1} max={6}
               value={settings.maxProofStages}
               onChange={e => updateInt('maxProofStages', e.target.value, 1, 6)}
+            />
+
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 16 }}>
+              <input
+                type="checkbox"
+                checked={settings.enableSourceSearch}
+                onChange={e => update('enableSourceSearch', e.target.checked)}
+              />
+              Native source search for max
+            </label>
+
+            <label style={{ marginTop: 14 }}>Search Providers</label>
+            <input
+              type="text"
+              value={settings.sourceSearchProviders}
+              onChange={e => update('sourceSearchProviders', e.target.value)}
+            />
+
+            <label style={{ marginTop: 14 }}>Max Sources</label>
+            <input
+              type="number" min={1} max={20}
+              value={settings.maxSources}
+              onChange={e => updateInt('maxSources', e.target.value, 1, 20)}
+            />
+
+            <label style={{ marginTop: 14 }}>Results Per Query</label>
+            <input
+              type="number" min={1} max={8}
+              value={settings.maxResultsPerQuery}
+              onChange={e => updateInt('maxResultsPerQuery', e.target.value, 1, 8)}
             />
           </div>
 

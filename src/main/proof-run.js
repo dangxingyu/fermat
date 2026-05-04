@@ -69,6 +69,10 @@ function createObligationGraph(target) {
     routes: {},
     attempts: {},
     verdicts: {},
+    sourceCards: {},
+    researchRuns: {},
+    ledgerProposals: {},
+    partialResults: {},
   };
 }
 
@@ -121,6 +125,93 @@ function applyEventToGraph(graph, event) {
     if (status) graph.status = normalizeGraphStatus(status);
   } else if (event.type === 'research.completed') {
     ingestClaimsAndObligations(graph, text, { sourceType: 'research', sourceId: event.id });
+  } else if (event.type === 'source_search.planned') {
+    graph.researchRuns[payload.runId || event.id] = {
+      id: payload.runId || event.id,
+      eventId: event.id,
+      stage: payload.stage || null,
+      status: 'planned',
+      searchPlan: payload.searchPlan || null,
+    };
+  } else if (event.type === 'source_search.completed' || event.type === 'source_search.failed') {
+    const runId = payload.runId || event.id;
+    const existing = graph.researchRuns[runId] || { id: runId, eventId: event.id };
+    graph.researchRuns[runId] = {
+      ...existing,
+      eventId: event.id,
+      stage: payload.stage || existing.stage || null,
+      status: event.type === 'source_search.completed' ? 'completed' : 'failed',
+      searchRunPath: payload.searchRunPath || existing.searchRunPath || null,
+      sourceCardIds: payload.sourceCardIds || existing.sourceCardIds || [],
+      errors: payload.errors || existing.errors || [],
+    };
+    if (event.type === 'source_search.failed') graph.status = 'needs_more_sources';
+  } else if (event.type === 'source_card.created') {
+    const card = payload.sourceCard || payload.card || {};
+    if (card.id) {
+      graph.sourceCards[card.id] = {
+        id: card.id,
+        eventId: event.id,
+        sourceType: card.sourceType || null,
+        title: card.title || '',
+        url: card.url || '',
+        identifiers: card.identifiers || {},
+        reliability: card.reliability || 'unknown',
+        reviewStatus: card.reviewStatus || 'candidate',
+        extractedClaimCount: Array.isArray(card.extractedClaims) ? card.extractedClaims.length : 0,
+      };
+    }
+  } else if (event.type === 'paper_read.completed') {
+    const sourceCards = payload.sourceCards || [];
+    for (const card of sourceCards) {
+      if (!card?.id) continue;
+      graph.sourceCards[card.id] = {
+        ...(graph.sourceCards[card.id] || {}),
+        id: card.id,
+        eventId: event.id,
+        sourceType: card.sourceType || graph.sourceCards[card.id]?.sourceType || null,
+        title: card.title || graph.sourceCards[card.id]?.title || '',
+        url: card.url || graph.sourceCards[card.id]?.url || '',
+        identifiers: card.identifiers || graph.sourceCards[card.id]?.identifiers || {},
+        reliability: card.reliability || graph.sourceCards[card.id]?.reliability || 'unknown',
+        reviewStatus: card.reviewStatus || 'read',
+        extractedClaimCount: Array.isArray(card.extractedClaims) ? card.extractedClaims.length : 0,
+      };
+    }
+    ingestClaimsAndObligations(graph, payload.text || '', { sourceType: 'paper_read', sourceId: event.id });
+  } else if (event.type === 'ledger.proposal.created') {
+    const proposal = payload.proposal || {};
+    if (proposal.id) {
+      graph.ledgerProposals[proposal.id] = {
+        id: proposal.id,
+        eventId: event.id,
+        status: proposal.status || 'proposed',
+        tier: proposal.tier || '',
+        usePolicy: proposal.usePolicy || '',
+        statement: proposal.statement || '',
+        sourceRefs: proposal.sourceRefs || '',
+      };
+    }
+  } else if (event.type === 'partial_result.verified') {
+    const obligationId = payload.obligationId || payload.selectedObligationIds?.[0] || null;
+    const statement = payload.statement || (obligationId && graph.obligations?.[obligationId]?.statement) || '';
+    const id = payload.id || `partial:${stableHash(statement || payload.proof || event.id)}`;
+    graph.partialResults[id] = {
+      id,
+      eventId: event.id,
+      stage: payload.stage || null,
+      obligationId,
+      statement,
+      proofHash: stableHash(payload.proof || payload.correctedProof || ''),
+      verifierVerdict: payload.verdictTag || 'PASS',
+      source: payload.source || 'run_verified',
+    };
+    if (obligationId && graph.obligations?.[obligationId]) {
+      graph.obligations[obligationId].status = 'proved';
+      graph.obligations[obligationId].tier = 'RUN_VERIFIED';
+      graph.obligations[obligationId].usePolicy = 'cite_directly';
+    }
+    if (graph.status !== 'proved') graph.status = 'partial_progress';
   } else if (event.type === 'attempt.completed') {
     const attemptId = `attempt:${payload.stage || 0}:${payload.index ?? graph.events?.length ?? event.id}:${payload.role || 'unknown'}`;
     graph.attempts[attemptId] = {
@@ -152,7 +243,7 @@ function applyEventToGraph(graph, event) {
       targetObligationIds,
     };
     updateObligationsFromVerdict(graph, targetObligationIds, verdictTag);
-    if (verdictTag === 'PASS') graph.status = 'proved';
+    if (verdictTag === 'PASS' && verdictProvesTarget(payload)) graph.status = 'proved';
   } else if (event.type === 'correction.verified') {
     const verdictTag = cleanVerdictTag(payload.verdictTag || extractVerdict(payload.verdict));
     const targetObligationIds = payload.selectedObligationIds ||
@@ -171,7 +262,7 @@ function applyEventToGraph(graph, event) {
       correction: true,
     };
     updateObligationsFromVerdict(graph, targetObligationIds, verdictTag);
-    if (verdictTag === 'PASS') graph.status = 'proved';
+    if (verdictTag === 'PASS' && verdictProvesTarget(payload)) graph.status = 'proved';
   } else if (event.type === 'scheduler.decision') {
     graph.lastSchedulerDecision = payload.decision || payload;
   } else if (event.type === 'run.completed') {
@@ -181,8 +272,17 @@ function applyEventToGraph(graph, event) {
   }
 }
 
+function verdictProvesTarget(payload = {}) {
+  const role = String(payload.role || '');
+  const index = String(payload.index ?? '');
+  return role !== 'subgoal-proof' && !index.startsWith('subgoal-');
+}
+
 function normalizeGraphStatus(status) {
   const key = String(status || '').trim().toLowerCase();
+  if (key.includes('partial_progress')) return 'partial_progress';
+  if (key.includes('needs_more_sources')) return 'needs_more_sources';
+  if (key.includes('blocked_with_frontier')) return 'blocked_with_frontier';
   if (key.includes('blocked')) return 'blocked';
   if (key.includes('needs_research')) return 'needs_research';
   if (key.includes('needs_sublemmas')) return 'needs_sublemmas';
@@ -391,6 +491,7 @@ const USE_POLICY_PRIORITY = {
   prove_inline: 90,
   prove_as_sublemma: 80,
   cite_existing: 55,
+  cite_directly: 55,
   research_before_use: 40,
   do_not_use: -100,
 };
@@ -406,6 +507,8 @@ const STATUS_PRIORITY = {
   open: 10,
   needs_sublemmas: 6,
   needs_research: 2,
+  needs_more_sources: 2,
+  partial_progress: 5,
   pending: 1,
 };
 
@@ -413,6 +516,10 @@ const PROVENANCE_PRIORITY = {
   proof_notebook: 8,
   proof_plan: 6,
   research: 5,
+  source_search: 7,
+  source_card: 7,
+  paper_read: 7,
+  partial_result: 10,
   knowledge: 4,
 };
 

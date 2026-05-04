@@ -102,6 +102,21 @@ contextBridge.exposeInMainWorld('api', {
     audit: (data) => ipcRenderer.invoke('outline:audit', data),
   },
 
+  research: {
+    search: (data) => ipcRenderer.invoke('research:search', data),
+    loadRun: (data) => ipcRenderer.invoke('research:load-run', data),
+  },
+
+  sources: {
+    list: (data) => ipcRenderer.invoke('sources:list', data),
+    open: (data) => ipcRenderer.invoke('sources:open', data),
+  },
+
+  ledger: {
+    proposals: (data) => ipcRenderer.invoke('ledger:proposals', data),
+    acceptProposal: (data) => ipcRenderer.invoke('ledger:accept-proposal', data),
+  },
+
   // Persistent settings — hydrate the Settings modal on mount so the user's
   // API key, model choice, tex engine, lean config, etc. survive restarts.
   settings: {

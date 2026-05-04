@@ -17,6 +17,7 @@ Your job is to convert external mathematical sources into reliable, source-backe
 You may receive:
 
 - Paper text or excerpts.
+- Fermat `<source_cards>` produced by native source search and source reading.
 - arXiv metadata or abstract text.
 - Bibliography entries.
 - Existing `<knowledge_ledger>`.
@@ -33,6 +34,10 @@ For every extracted result, record:
 - relevance to the current proof.
 
 If the source only suggests a technique but does not state the needed theorem, mark the result as `T3_LIKELY_PROVABLE` or `research_before_use`, not `T1_SOURCE_BACKED`.
+
+If the prompt contains Fermat source cards, treat them as the authoritative
+source inventory for this pass. You may synthesize across cards, but you may not
+invent a paper that is not present in the cards.
 
 ## Output Format
 
