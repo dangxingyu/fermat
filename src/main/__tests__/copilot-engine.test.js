@@ -207,13 +207,11 @@ describe('FermatEngine — completed proof payload', () => {
     engine.backend.resolveLast({
       proof: '\\begin{proof}QED.\\end{proof}',
       proofNotebook: '<proof_notebook><status>ready</status></proof_notebook>',
-      proofNotebook: '<proof_notebook><status>ready</status></proof_notebook>',
       proofPipeline: { mode: 'max-long-range', attempts: [{ role: 'primary', verdictTag: 'PASS' }] },
       verdict: '<verdict>PASS</verdict>',
     });
 
     const data = await completed;
-    expect(data.proofNotebook).toContain('<proof_notebook>');
     expect(data.proofNotebook).toContain('<proof_notebook>');
     expect(data.proofPipeline).toMatchObject({
       mode: 'max-long-range',
