@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import Toolbar from './Toolbar';
 import TabBar from './TabBar';
 import TheoryOutline from './TheoryOutline';
@@ -658,7 +658,7 @@ export default function App() {
       }),
     ];
     return () => offs.forEach(off => off?.());
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Lean verification event wiring ─────────────────────────────────────
   useEffect(() => {
@@ -722,7 +722,7 @@ export default function App() {
       offStatus?.();
       offCompleted?.();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── Lean statement review controls ─────────────────────────────────────
   const handleConfirmStatement = useCallback((taskId) => {

@@ -59,7 +59,7 @@ class ContextAssembler {
    * @returns {object} structured context
    */
   assembleForProof(outline, targetNode, options = {}) {
-    const { nodes, edges, preamble, theoremStyles, labelToNode, fullText } = outline;
+    const { nodes, preamble, theoremStyles, labelToNode, fullText } = outline;
     const { knowledgeLedger = null } = options;
 
     // ─── 1. Theory map: concise summary of the whole document ───

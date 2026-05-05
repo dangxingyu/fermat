@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 
 /**
  * Proof Review Panel — shows AI-generated proofs for medium/high/max effort markers.

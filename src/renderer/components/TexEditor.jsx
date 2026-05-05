@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 // QA P1-04: import only the core editor API, not the barrel entry. The
 // barrel (`monaco-editor`) side-effect-imports 80+ language contributions
 // (abap, freemarker2, systemverilog, …) none of which Fermat uses — the
@@ -176,10 +176,9 @@ export default function TexEditor({ content, onChange, editorRef, activeTabId, p
       // Register the Claude-powered inline completion provider once per page
       // load. It's a language-level provider, so multiple editor instances
       // share it — that's fine since each invocation gets its own model+pos.
-      let inlineDispose = null;
       if (!inlineCompletionsRegistered) {
         inlineCompletionsRegistered = true;
-        inlineDispose = registerInlineCompletions(monaco, 'latex');
+        registerInlineCompletions(monaco, 'latex');
       }
 
       // Content change handler — fires only for the active model (editor-level,

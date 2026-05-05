@@ -81,13 +81,11 @@ function parseTheoryOutline(texContent) {
 
   // ─── Extract preamble (everything before \begin{document}) ───
   let preamble = '';
-  let documentBodyStart = 0;
   const customCommands = [];  // { command, definition, lineNumber }
 
   for (let i = 0; i < lines.length; i++) {
     if (/\\begin\{document\}/.test(lines[i])) {
       preamble = lines.slice(0, i).join('\n');
-      documentBodyStart = i + 1;
       break;
     }
   }

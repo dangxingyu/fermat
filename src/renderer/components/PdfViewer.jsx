@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { TextLayer } from 'pdfjs-dist';
 import 'pdfjs-dist/web/pdf_viewer.css';
@@ -369,7 +369,7 @@ export default function PdfViewer({ onCompile, onInverseSearch, forwardHighlight
 
     const timer = setTimeout(() => setHighlightInfo(null), 2500);
     return () => clearTimeout(timer);
-  }, [forwardHighlight]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [forwardHighlight]);
 
   // ─── Fit to width: scale so the page fills the viewer horizontally ───
   // Pure calculation from refs + DOM — no dependency on `zoom` state,

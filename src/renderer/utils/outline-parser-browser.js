@@ -40,7 +40,6 @@ export function parseTheoryOutlineBrowser(texContent) {
   let currentEnv = null;
   let currentNode = null;
   let nodeIdCounter = 0;
-  let insideProof = false;
   let proofForNode = null;
 
   for (let i = 0; i < lines.length; i++) {
@@ -118,7 +117,6 @@ export function parseTheoryOutlineBrowser(texContent) {
     }
 
     if (PROOF_BEGIN.test(line)) {
-      insideProof = true;
       const lastTheoremNode = [...nodes].reverse().find(
         n => THEOREM_ENVS.includes(n.type) && !n.hasProof
       );
@@ -126,7 +124,6 @@ export function parseTheoryOutlineBrowser(texContent) {
     }
     if (PROOF_END.test(line) && proofForNode) {
       proofForNode.hasProof = true;
-      insideProof = false;
       proofForNode = null;
     }
 

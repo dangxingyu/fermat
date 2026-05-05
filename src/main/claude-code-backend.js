@@ -1018,7 +1018,6 @@ All attempts in this stage failed verification. Update the notebook: preserve su
     }));
 
     let currentCode = sketch;
-    let leanLog = sketchLog;
 
     // ── Phase 2 & 3: Fill each sorry ──────────────────────────────────────
     for (let i = 0; i < sorries.length; i++) {
@@ -1059,12 +1058,9 @@ All attempts in this stage failed verification. Update the notebook: preserve su
         const candidate = this._extractLeanBlock(rawFill) || rawFill.trim();
         lastCandidate = candidate;
 
-        let lineOut = '';
         const fillResult = await this._cachedVerify(leanRunner, candidate, (line) => {
-          lineOut += line + '\n';
           if (onStream) onStream(`[lean] ${line}`);
         }, options.signal);
-        leanLog = lineOut;
         fillErrors = fillResult.errors.filter(e => e.severity === 'error');
 
         const newSorryCount = this._countCodeSorries(candidate);

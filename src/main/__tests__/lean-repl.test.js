@@ -340,7 +340,7 @@ describe('LeanRepl._onClose — queue cleanup', () => {
 
     let restartScheduled = false;
     const origSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = (fn, _ms) => { restartScheduled = true; return 0; };
+    globalThis.setTimeout = (_fn, _ms) => { restartScheduled = true; return 0; };
 
     try {
       r._onClose(0);

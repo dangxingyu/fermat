@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /**
  * LeanPanel
@@ -139,7 +139,6 @@ export default function LeanPanel({
 
   const isReview   = phase === 'lean-statement-review';
   const isVerified = phase === 'lean-verified';
-  const isFailed   = phase === 'lean-failed' || phase === 'lean-partial';
 
   // The statement to display: from the review event, or parsed from final code
   const displayStatement = statement || leanStatement || null;
